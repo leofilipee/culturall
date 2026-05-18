@@ -252,6 +252,7 @@ if ($method === 'POST') {
             'locationId' => $locationId,
             'organizerId' => $organizerId,
         ]);
+        culturall_check_db_warnings($pdo);
 
         $eventId = (int) $pdo->lastInsertId();
 
@@ -384,6 +385,7 @@ if ($method === 'PATCH') {
                 'status' => 'pendente',
                 'eventId' => $eventId,
             ]);
+            culturall_check_db_warnings($pdo);
 
             $pdo->commit();
             culturall_json_response(['ok' => true]);

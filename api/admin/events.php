@@ -180,6 +180,7 @@ if ($method === 'PATCH') {
         if ($action === 'delete') {
             $delete = $pdo->prepare('DELETE FROM evento WHERE idevento = :eventId');
             $delete->execute(['eventId' => $eventId]);
+            culturall_check_db_warnings($pdo);
             $pdo->commit();
 
             culturall_json_response(['ok' => true]);
@@ -217,6 +218,7 @@ if ($method === 'PATCH') {
                 'adminId' => $adminId,
                 'eventId' => $eventId,
             ]);
+            culturall_check_db_warnings($pdo);
         } else {
             $update = $pdo->prepare(
                 'UPDATE evento
@@ -232,6 +234,7 @@ if ($method === 'PATCH') {
                 'adminId' => $adminId,
                 'eventId' => $eventId,
             ]);
+            culturall_check_db_warnings($pdo);
         }
 
         $pdo->commit();
