@@ -39,7 +39,7 @@ if ($isAdmin) {
 
 if ($method === 'GET') {
     $statusFilter = strtolower(trim((string) ($_GET['status'] ?? 'all')));
-    $allowed = ['all', 'pendente', 'ativo', 'inativo', 'oculto', 'publicado', 'aprovado', 'recusado'];
+    $allowed = ['all', 'pendente', 'ativo', 'inativo', 'oculto', 'publicado', 'recusado'];
     if (!in_array($statusFilter, $allowed, true)) {
         $statusFilter = 'all';
     }
@@ -119,8 +119,7 @@ if ($method === 'GET') {
                 'status' => (string) $row['evestado'],
                 'statusLabel' => match ((string) $row['evestado']) {
                     'publicado' => 'Ativo',
-                    'aprovado' => 'Ativo',
-                    'ativo' => 'Ativo',
+                        'ativo' => 'Ativo',
                     'pendente' => 'Pendente',
                     'oculto' => 'Oculto',
                     'recusado' => 'Inativo',
@@ -192,6 +191,16 @@ if ($method === 'PATCH') {
             'reject' => 'inativo',
             default => 'ativo'
         };
+
+        // Ensure the status to be written is allowed by the DB enum to avoid
+        // SQL warnings/truncation when attempting to set unsupported values.
+        $allowedEventStates = ['pendente', 'ativo', 'inativo', 'publicado', 'oculto', 'recusado'];
+        if (!in_array($status, $allowedEventStates, true)) {
+            culturall_json_response([
+                'ok' => false,
+                'message' => 'Estado inválido para o evento.'
+            ], 422);
+        }
 
         if ($action === 'reject') {
             $update = $pdo->prepare(

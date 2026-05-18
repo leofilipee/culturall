@@ -64,9 +64,8 @@ if ($method === 'GET') {
 
     if ($statusFilter !== 'all') {
         if ($statusFilter === 'published') {
-            $conditions[] = 'e.evestado IN (:statusPublished, :statusApproved, :statusActive)';
+            $conditions[] = 'e.evestado IN (:statusPublished, :statusActive)';
             $params['statusPublished'] = 'publicado';
-            $params['statusApproved'] = 'aprovado';
             $params['statusActive'] = 'ativo';
         } else {
             $conditions[] = 'e.evestado = :status';

@@ -125,7 +125,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return 'pending';
     }
 
-    if (['publicado', 'published', 'ativo', 'active', 'aprovado', 'approved'].includes(normalizedStatus)) {
+    if (['publicado', 'published', 'ativo', 'active', 'approved'].includes(normalizedStatus)) {
       return 'active';
     }
 
@@ -163,7 +163,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const normalizePublicEventStatus = (status) => {
     const normalizedStatus = String(status ?? '').toLowerCase();
-    if (['publicado', 'published', 'ativo', 'active', 'aprovado', 'approved'].includes(normalizedStatus)) {
+    if (['publicado', 'published', 'ativo', 'active', 'approved'].includes(normalizedStatus)) {
       return 'active';
     }
 
