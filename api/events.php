@@ -7,6 +7,61 @@ $pdo = culturall_pdo();
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $hasViewsTable = culturall_table_exists($pdo, 'eventovisualizacao');
 
+$normalizeEventImageSource = static function (mixed $value): ?string {
+    $imageSource = trim((string) $value);
+    if ($imageSource === '') {
+        return null;
+    }
+
+    $lowerSource = strtolower($imageSource);
+    if (str_starts_with($lowerSource, 'data:image/')) {
+        return $imageSource;
+    }
+
+    if (preg_match('/^https?:\/\//i', $imageSource) === 1 || str_starts_with($imageSource, '/')) {
+        return $imageSource;
+    }
+
+    return null;
+};
+
+$storeEventImages = static function (PDO $pdo, int $eventId, array $imageSources, bool $replaceExisting = false) use ($normalizeEventImageSource): void {
+    $normalizedImages = [];
+    foreach ($imageSources as $imageIndex => $imageSource) {
+        $normalizedImage = $normalizeEventImageSource($imageSource);
+        if ($normalizedImage === null) {
+            continue;
+        }
+
+        $normalizedImages[] = [
+            'index' => (int) $imageIndex,
+            'source' => $normalizedImage,
+        ];
+    }
+
+    if ($replaceExisting) {
+        $deleteImages = $pdo->prepare('DELETE FROM imagem WHERE imgidevento = :eventId');
+        $deleteImages->execute(['eventId' => $eventId]);
+    }
+
+    if (!$normalizedImages) {
+        return;
+    }
+
+    $insertImage = $pdo->prepare(
+        'INSERT INTO imagem (imglegenda, imgurl, imgtipo, imgidevento) VALUES (:caption, :url, :type, :eventId)'
+    );
+
+    foreach ($normalizedImages as $normalizedImage) {
+        $insertImage->execute([
+            'caption' => $normalizedImage['index'] === 0 ? null : null,
+            'url' => $normalizedImage['source'],
+            'type' => $normalizedImage['index'] === 0 ? 'capa' : 'galeria',
+            'eventId' => $eventId,
+        ]);
+    }
+};
+
 if ($method === 'GET') {
     $statusFilter = strtolower(trim((string) ($_GET['status'] ?? 'published')));
     $allowedStatuses = ['published', 'pending', 'hidden', 'rejected', 'all'];
@@ -121,7 +176,7 @@ if ($method === 'GET') {
             'rejectReason' => (string) ($row['evmotivorecusa'] ?? ''),
             'organizer' => (string) $row['orgnome'],
             'organizerEmail' => (string) $row['orgemail'],
-            'image' => (string) ($row['imagem_capa'] ?: 'img/events/default-event.jpg')
+            'image' => (string) ($row['imagem_capa'] ?? '')
         ];
     }, $statement->fetchAll());
 
@@ -255,24 +310,8 @@ if ($method === 'POST') {
 
         $eventId = (int) $pdo->lastInsertId();
 
-        if (is_array($imageUrls)) {
-            $insertImage = $pdo->prepare(
-                'INSERT INTO imagem (imglegenda, imgurl, imgtipo, imgidevento) VALUES (:caption, :url, :type, :eventId)'
-            );
-
-            foreach ($imageUrls as $index => $imageUrl) {
-                $normalizedUrl = trim((string) $imageUrl);
-                if ($normalizedUrl === '') {
-                    continue;
-                }
-
-                $insertImage->execute([
-                    'caption' => $index === 0 ? $title : null,
-                    'url' => $normalizedUrl,
-                    'type' => $index === 0 ? 'capa' : 'galeria',
-                    'eventId' => $eventId,
-                ]);
-            }
+        if (is_array($imageUrls) && $imageUrls !== []) {
+            $storeEventImages($pdo, $eventId, $imageUrls, false);
         }
 
         $pdo->commit();
@@ -390,6 +429,10 @@ if ($method === 'PATCH') {
                 'status' => 'pendente',
                 'eventId' => $eventId,
             ]);
+
+            if (isset($payload['images']) && is_array($payload['images']) && $payload['images'] !== []) {
+                $storeEventImages($pdo, $eventId, $payload['images'], true);
+            }
 
             $pdo->commit();
             culturall_json_response(['ok' => true]);

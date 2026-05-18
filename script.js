@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const iconLocation = '<svg viewBox="0 0 24 24"><path d="M12 21s6-5.5 6-11a6 6 0 0 0-12 0c0 5.5 6 11 6 11Z"></path><circle cx="12" cy="10" r="2.2"></circle></svg>';
   const iconLogin = '<svg viewBox="0 0 24 24"><path d="M10 17l5-5-5-5"></path><path d="M15 12H4"></path><path d="M20 4v16"></path></svg>';
   const iconLogout = '<svg viewBox="0 0 24 24"><path d="M14 17l5-5-5-5"></path><path d="M19 12H8"></path><path d="M8 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h3"></path></svg>';
+  const defaultEventImage = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" role="img" aria-label="Imagem indisponível"><rect width="1200" height="800" fill="#111111"/><g fill="none" stroke="#f2e6d8" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" opacity="0.75"><rect x="300" y="220" width="600" height="360" rx="26"/><circle cx="470" cy="350" r="48"/><path d="M330 540l140-140 110 110 90-90 200 200"/></g><text x="600" y="670" text-anchor="middle" font-family="Arial, sans-serif" font-size="34" fill="#f2e6d8" opacity="0.9">Imagem indisponível</text></svg>');
   const pageConfig = {
     home: {
       title: 'Todos os Eventos',
@@ -233,7 +234,7 @@ document.addEventListener('DOMContentLoaded', () => {
       priceLabel: event.priceLabel ?? (isFree ? 'Entrada Gratuita' : `€${priceValue.toFixed(0)}`),
       priceType: event.priceType ?? (isFree ? 'Gratuito' : 'Pago'),
       views: Number(event.views ?? 0),
-      image: event.image ?? 'img/events/default-event.jpg',
+      image: event.image || defaultEventImage,
       ticketUrl: event.ticketUrl ?? '',
       status: normalizePublicEventStatus(event.status),
       statusLabel: event.statusLabel ?? getEventStatusLabel(normalizePublicEventStatus(event.status)),
@@ -332,6 +333,18 @@ document.addEventListener('DOMContentLoaded', () => {
     reader.onerror = () => reject(reader.error ?? new Error('Não foi possível ler a imagem.'));
     reader.readAsDataURL(file);
   })));
+
+  const isLikelyImageFile = (file) => {
+    if (!(file instanceof File)) {
+      return false;
+    }
+
+    if (typeof file.type === 'string' && file.type.startsWith('image/')) {
+      return true;
+    }
+
+    return /\.(png|jpe?g|gif|webp|avif|bmp|svg|tiff?|heic|heif)$/i.test(file.name ?? '');
+  };
 
   const getAllEvents = () => {
     return serverEventsState.loaded ? [...serverEventsState.items] : [];
@@ -2974,7 +2987,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
               <label class="organizer-image-field">
                 Imagens do evento
-                <input id="organizerEventImages" type="file" accept="image/*" multiple />
+                <input id="organizerEventImages" type="file" accept="image/*,.png,.jpg,.jpeg,.gif,.webp,.avif,.bmp,.svg,.tif,.tiff,.heic,.heif" multiple />
                 <span class="organizer-image-hint">A primeira imagem selecionada será usada como vitrine do evento.</span>
               </label>
 
@@ -3209,11 +3222,20 @@ document.addEventListener('DOMContentLoaded', () => {
           const location = organizerEventLocation?.value.trim() ?? '';
           const priceType = organizerEventPriceType?.value ?? 'Gratuito';
           const ticketUrl = organizerEventTicketUrl?.value.trim() ?? '';
+          const selectedImageFiles = Array.from(organizerEventImages?.files ?? []);
+          const invalidImageFiles = selectedImageFiles.filter((file) => !isLikelyImageFile(file));
           const selectedRecurringDays = Array.from(document.querySelectorAll('input[name="organizerRecurringDays"]'))
             .filter((input) => input.checked)
             .map((input) => input.value);
 
           const isPaid = priceType === 'Pago';
+          if (invalidImageFiles.length > 0) {
+            if (organizerCreateMessage) {
+              organizerCreateMessage.textContent = 'Seleciona apenas ficheiros de imagem válidos.';
+            }
+            return;
+          }
+
           if (!title || !location || (isPaid && !ticketUrl)) {
             if (organizerCreateMessage) {
               organizerCreateMessage.textContent = isPaid
@@ -3297,6 +3319,10 @@ document.addEventListener('DOMContentLoaded', () => {
             }
           }
 
+          const imagePayload = selectedImageFiles.length > 0
+            ? await readFilesAsDataUrls(selectedImageFiles)
+            : [];
+
           try {
             if (editingOrganizerEventId) {
               await requestJson('api/events.php', {
@@ -3315,7 +3341,8 @@ document.addEventListener('DOMContentLoaded', () => {
                   locationDistrict: getDistrictKey(location) ?? 'Lisboa',
                   isRecurring,
                   recurringPattern: isRecurring ? 'semanal' : '',
-                  recurringDays: isRecurring ? recurringDays.join(',') : ''
+                  recurringDays: isRecurring ? recurringDays.join(',') : '',
+                  images: imagePayload
                 })
               });
             } else {
@@ -3334,7 +3361,8 @@ document.addEventListener('DOMContentLoaded', () => {
                   locationDistrict: getDistrictKey(location) ?? 'Lisboa',
                   isRecurring,
                   recurringPattern: isRecurring ? 'semanal' : '',
-                  recurringDays: isRecurring ? recurringDays.join(',') : ''
+                  recurringDays: isRecurring ? recurringDays.join(',') : '',
+                  images: imagePayload
                 })
               });
             }
