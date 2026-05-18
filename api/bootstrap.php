@@ -235,18 +235,3 @@ function culturall_destroy_session(): void
 
     session_destroy();
 }
-
-function culturall_check_db_warnings(PDO $pdo): void
-{
-    try {
-        $warnings = $pdo->query('SHOW WARNINGS')->fetchAll(PDO::FETCH_ASSOC);
-        if (!empty($warnings)) {
-            $messages = array_map(static function (array $w) {
-                return trim(($w['Level'] ?? '') . ': ' . ($w['Message'] ?? ''));
-            }, $warnings);
-            throw new RuntimeException('Database warnings: ' . implode(' | ', $messages));
-        }
-    } catch (Throwable $e) {
-        throw $e;
-    }
-}

@@ -180,17 +180,16 @@ if ($method === 'PATCH') {
         if ($action === 'delete') {
             $delete = $pdo->prepare('DELETE FROM evento WHERE idevento = :eventId');
             $delete->execute(['eventId' => $eventId]);
-            culturall_check_db_warnings($pdo);
             $pdo->commit();
 
             culturall_json_response(['ok' => true]);
         }
 
         $status = match ($action) {
-            'approve', 'show' => 'ativo',
+            'approve', 'show' => 'publicado',
             'hide' => 'oculto',
             'reject' => 'inativo',
-            default => 'ativo'
+            default => 'publicado'
         };
 
         // Ensure the status to be written is allowed by the DB enum to avoid
@@ -218,7 +217,6 @@ if ($method === 'PATCH') {
                 'adminId' => $adminId,
                 'eventId' => $eventId,
             ]);
-            culturall_check_db_warnings($pdo);
         } else {
             $update = $pdo->prepare(
                 'UPDATE evento
@@ -234,7 +232,6 @@ if ($method === 'PATCH') {
                 'adminId' => $adminId,
                 'eventId' => $eventId,
             ]);
-            culturall_check_db_warnings($pdo);
         }
 
         $pdo->commit();

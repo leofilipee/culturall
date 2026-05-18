@@ -252,7 +252,6 @@ if ($method === 'POST') {
             'locationId' => $locationId,
             'organizerId' => $organizerId,
         ]);
-        culturall_check_db_warnings($pdo);
 
         $eventId = (int) $pdo->lastInsertId();
 
@@ -323,9 +322,15 @@ if ($method === 'PATCH') {
             culturall_json_response(['ok' => true]);
         }
 
+        $allowedEventStates = ['pendente', 'ativo', 'inativo', 'publicado', 'oculto', 'recusado'];
+
         if ($action === 'inactivate') {
+            $status = 'inativo';
+            if (!in_array($status, $allowedEventStates, true)) {
+                culturall_json_response(['ok' => false, 'message' => 'Estado inválido para o evento.'], 422);
+            }
             $update = $pdo->prepare('UPDATE evento SET evestado = :status WHERE idevento = :eventId');
-            $update->execute(['status' => 'inativo', 'eventId' => $eventId]);
+            $update->execute(['status' => $status, 'eventId' => $eventId]);
             culturall_json_response(['ok' => true]);
         }
 
@@ -385,7 +390,6 @@ if ($method === 'PATCH') {
                 'status' => 'pendente',
                 'eventId' => $eventId,
             ]);
-            culturall_check_db_warnings($pdo);
 
             $pdo->commit();
             culturall_json_response(['ok' => true]);
