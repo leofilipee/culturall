@@ -66,13 +66,20 @@ if (($user['tutipo'] ?? '') === 'organizador' && ($user['orgestado'] ?? 'aprovad
     ], 403);
 }
 
+$location = '';
+if (culturall_column_exists($pdo, 'utilizador', 'utlocalizacao')) {
+    $locationStatement = $pdo->prepare('SELECT utlocalizacao FROM utilizador WHERE idutilizador = :userId LIMIT 1');
+    $locationStatement->execute(['userId' => (int) $user['idutilizador']]);
+    $location = (string) ($locationStatement->fetchColumn() ?: '');
+}
+
 $sessionUser = [
     'id' => (int) $user['idutilizador'],
     'email' => (string) $user['utemail'],
     'name' => (string) $user['utnome'],
     'roleLabel' => culturall_role_label((string) $user['tutipo']),
     'accountType' => culturall_account_type((string) $user['tutipo']),
-    'location' => ''
+    'location' => $location
 ];
 
 culturall_store_session_user($sessionUser);

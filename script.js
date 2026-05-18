@@ -10,10 +10,6 @@ document.addEventListener('DOMContentLoaded', () => {
     { value: 'Dom', label: 'Dom' }
   ];
 
-  const sessionKey = 'culturall-session';
-  const favoritesKey = 'culturall-favorites';
-  const guestFavoritesKey = 'culturall-favorites-guest';
-  const createdEventsKey = 'culturall-created-events';
   const pageType = document.body.dataset.page ?? 'home';
   const iconCalendar = '<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="3"></rect><path d="M8 3v4"></path><path d="M16 3v4"></path><path d="M4 9h16"></path></svg>';
   const iconLocation = '<svg viewBox="0 0 24 24"><path d="M12 21s6-5.5 6-11a6 6 0 0 0-12 0c0 5.5 6 11 6 11Z"></path><circle cx="12" cy="10" r="2.2"></circle></svg>';
@@ -40,20 +36,28 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  const getSession = () => {
-    try {
-      return JSON.parse(localStorage.getItem(sessionKey)) ?? null;
-    } catch {
-      return null;
-    }
-  };
+  let currentSession = null;
+  let sessionLoaded = false;
+
+  const getSession = () => currentSession;
 
   const setSession = (session) => {
-    localStorage.setItem(sessionKey, JSON.stringify(session));
+    currentSession = session;
   };
 
   const clearSession = () => {
-    localStorage.removeItem(sessionKey);
+    currentSession = null;
+  };
+
+  const loadSessionFromApi = async () => {
+    try {
+      const response = await requestJson('api/me.php');
+      currentSession = response?.user ?? null;
+    } catch {
+      currentSession = null;
+    } finally {
+      sessionLoaded = true;
+    }
   };
 
   const syncLogoutRequest = () => {
@@ -101,9 +105,82 @@ document.addEventListener('DOMContentLoaded', () => {
     source: 'cache'
   };
 
+  const adminEventsState = {
+    loaded: false,
+    items: []
+  };
+
+  const organizerEventsState = {
+    loaded: false,
+    items: []
+  };
+
   let rerenderListingPage = null;
 
   const normalizeEventId = (value) => String(value);
+
+  const normalizeAdminEventStatus = (status) => {
+    const normalizedStatus = String(status ?? '').toLowerCase();
+    if (normalizedStatus === 'pendente' || normalizedStatus === 'pending') {
+      return 'pending';
+    }
+
+    if (['publicado', 'published', 'ativo', 'active', 'aprovado', 'approved'].includes(normalizedStatus)) {
+      return 'active';
+    }
+
+    if (['inativo', 'inactive', 'recusado', 'rejected'].includes(normalizedStatus)) {
+      return 'inactive';
+    }
+
+    if (normalizedStatus === 'oculto' || normalizedStatus === 'hidden') {
+      return 'hidden';
+    }
+
+    return 'pending';
+  };
+
+  const normalizeAdminEventStatusLabel = (status) => {
+    const normalizedStatus = normalizeAdminEventStatus(status);
+    if (normalizedStatus === 'pending') {
+      return 'Pendente';
+    }
+
+    if (normalizedStatus === 'active') {
+      return 'Ativo';
+    }
+
+    if (normalizedStatus === 'inactive') {
+      return 'Inativo';
+    }
+
+    if (normalizedStatus === 'hidden') {
+      return 'Oculto';
+    }
+
+    return 'Inativo';
+  };
+
+  const normalizePublicEventStatus = (status) => {
+    const normalizedStatus = String(status ?? '').toLowerCase();
+    if (['publicado', 'published', 'ativo', 'active', 'aprovado', 'approved'].includes(normalizedStatus)) {
+      return 'active';
+    }
+
+    if (['pendente', 'pending'].includes(normalizedStatus)) {
+      return 'pending';
+    }
+
+    if (['oculto', 'hidden'].includes(normalizedStatus)) {
+      return 'hidden';
+    }
+
+    if (['inativo', 'inactive', 'recusado', 'rejected'].includes(normalizedStatus)) {
+      return 'inactive';
+    }
+
+    return 'active';
+  };
 
   const formatApiDateLabel = (value) => {
     if (!value) {
@@ -124,6 +201,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }).format(parsedDate);
   };
 
+  const formatApiDateTime = (date) => {
+    const pad = (value) => String(value).padStart(2, '0');
+    return [
+      date.getFullYear(),
+      pad(date.getMonth() + 1),
+      pad(date.getDate())
+    ].join('-') + ` ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  };
+
   const normalizeServerEvent = (event) => {
     const priceValue = Number(event.price ?? 0);
     const isFree = Math.abs(priceValue) < 0.001;
@@ -137,6 +223,8 @@ document.addEventListener('DOMContentLoaded', () => {
       category: String(event.category ?? 'Outros'),
       description: String(event.description ?? ''),
       dateLabel: event.dateLabel ?? formatApiDateLabel(eventDate),
+      endDate: event.endDate ?? '',
+      endDateLabel: event.endDateLabel ?? (event.endDate ? formatApiDateLabel(event.endDate) : ''),
       dateBucket: event.dateBucket ?? getDateBucketForDateTime(new Date(eventDate).getTime(), Boolean(event.isRecurring)),
       eventDate,
       location: location || String(event.city ?? ''),
@@ -147,8 +235,8 @@ document.addEventListener('DOMContentLoaded', () => {
       views: Number(event.views ?? 0),
       image: event.image ?? 'img/events/default-event.jpg',
       ticketUrl: event.ticketUrl ?? '',
-      status: event.status ?? 'published',
-      statusLabel: event.statusLabel ?? getEventStatusLabel(event.status ?? 'published'),
+      status: normalizePublicEventStatus(event.status),
+      statusLabel: event.statusLabel ?? getEventStatusLabel(normalizePublicEventStatus(event.status)),
       organizer: event.organizer ?? '',
       organizerEmail: event.organizerEmail ?? '',
       isRecurring: Boolean(event.isRecurring),
@@ -180,13 +268,41 @@ document.addEventListener('DOMContentLoaded', () => {
       const favoriteIds = Array.isArray(response.favorites) ? response.favorites.map(normalizeEventId) : [];
       serverFavoritesState.ids = favoriteIds;
       serverFavoritesState.source = 'server';
-      setFavoriteIds(favoriteIds);
     } catch {
       serverFavoritesState.ids = [];
-      serverFavoritesState.source = 'cache';
+      serverFavoritesState.source = 'server';
     } finally {
       serverFavoritesState.loaded = true;
       rerenderListingPage?.();
+    }
+  };
+
+  const loadAdminEvents = async () => {
+    try {
+      const response = await requestJson('api/admin/events.php?status=all');
+      adminEventsState.items = Array.isArray(response.events)
+        ? response.events.map((event) => ({
+            ...event,
+            organizerName: event.organizerName ?? event.organizer ?? '',
+            status: normalizeAdminEventStatus(event.status),
+            statusLabel: normalizeAdminEventStatusLabel(event.status)
+          }))
+        : [];
+    } catch {
+      adminEventsState.items = [];
+    } finally {
+      adminEventsState.loaded = true;
+    }
+  };
+
+  const loadOrganizerEvents = async () => {
+    try {
+      const response = await requestJson('api/events.php?scope=own&status=all');
+      organizerEventsState.items = Array.isArray(response.events) ? response.events : [];
+    } catch {
+      organizerEventsState.items = [];
+    } finally {
+      organizerEventsState.loaded = true;
     }
   };
 
@@ -199,27 +315,15 @@ document.addEventListener('DOMContentLoaded', () => {
       return 'Pendente';
     }
 
-    if (status === 'published') {
-      return 'Publicado';
+    if (status === 'active') {
+      return 'Ativo';
     }
 
-    return 'Publicado';
-  };
-
-  const getCreatedEvents = () => {
-    try {
-      return (JSON.parse(localStorage.getItem(createdEventsKey)) ?? []).map((event) => ({
-        ...event,
-        status: event.status ?? 'pending',
-        statusLabel: event.statusLabel ?? getEventStatusLabel(event.status ?? 'pending')
-      }));
-    } catch {
-      return [];
+    if (status === 'inactive') {
+      return 'Inativo';
     }
-  };
 
-  const setCreatedEvents = (createdEvents) => {
-    localStorage.setItem(createdEventsKey, JSON.stringify(createdEvents));
+    return 'Ativo';
   };
 
   const readFilesAsDataUrls = async (files) => Promise.all(files.map((file) => new Promise((resolve, reject) => {
@@ -230,39 +334,22 @@ document.addEventListener('DOMContentLoaded', () => {
   })));
 
   const getAllEvents = () => {
-    const baseEvents = serverEventsState.loaded && serverEventsState.items.length > 0
-      ? serverEventsState.items
-      : [];
-
-    return [...baseEvents, ...getCreatedEvents().map(normalizeServerEvent)];
+    return serverEventsState.loaded ? [...serverEventsState.items] : [];
   };
 
-  const getVisibleEvents = () => getAllEvents().filter((event) => (event.status ?? 'published') === 'published');
-
-  const getFavoriteStorageKey = (session = getSession()) => {
-    const email = session?.email?.trim().toLowerCase();
-    if (!email) {
-      return guestFavoritesKey;
-    }
-
-    return `${favoritesKey}:${email}`;
-  };
+  const getVisibleEvents = () => getAllEvents().filter((event) => normalizePublicEventStatus(event.status) === 'active');
 
   const getFavoriteIds = () => {
     const session = getSession();
-    if (session && serverFavoritesState.loaded && serverFavoritesState.source === 'server') {
+    if (session && serverFavoritesState.loaded) {
       return [...serverFavoritesState.ids];
     }
 
-    try {
-      return (JSON.parse(localStorage.getItem(getFavoriteStorageKey(session))) ?? []).map((favoriteId) => normalizeEventId(favoriteId));
-    } catch {
-      return [];
-    }
+    return [];
   };
 
   const setFavoriteIds = (favoriteIds) => {
-    localStorage.setItem(getFavoriteStorageKey(), JSON.stringify(favoriteIds.map(normalizeEventId)));
+    serverFavoritesState.ids = favoriteIds.map(normalizeEventId);
   };
 
   const isFavorite = (eventId) => getFavoriteIds().includes(normalizeEventId(eventId));
@@ -289,13 +376,11 @@ document.addEventListener('DOMContentLoaded', () => {
             ? [...new Set([...favoriteIds, normalizedEventId])]
             : favoriteIds.filter((favoriteId) => favoriteId !== normalizedEventId);
 
-          serverFavoritesState.ids = nextFavoriteIds;
-          serverFavoritesState.source = 'server';
+          serverFavoritesState.ids = nextFavoriteIds.map(normalizeEventId);
           setFavoriteIds(nextFavoriteIds);
         }
       } catch {
-        serverFavoritesState.ids = favoriteIds;
-        serverFavoritesState.source = 'cache';
+        serverFavoritesState.ids = favoriteIds.map(normalizeEventId);
         setFavoriteIds(favoriteIds);
       }
     }
@@ -545,7 +630,7 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="event-body">
         <h2 class="event-title">${event.title}</h2>
         <div class="meta-list">
-          <div class="meta-item">${iconCalendar}<span>${event.dateLabel}</span></div>
+          <div class="meta-item">${iconCalendar}<span>${event.dateLabel}${event.endDateLabel ? ' — ' + event.endDateLabel : ''}</span></div>
           <div class="meta-item">${iconLocation}<span>${event.location}</span></div>
         </div>
         <div class="price-row">
@@ -571,7 +656,7 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="event-body">
         <h2 class="event-title">${event.title}</h2>
         <div class="meta-list">
-          <div class="meta-item">${iconCalendar}<span>${event.dateLabel}</span></div>
+          <div class="meta-item">${iconCalendar}<span>${event.dateLabel}${event.endDateLabel ? ' — ' + event.endDateLabel : ''}</span></div>
           <div class="meta-item">${iconLocation}<span>${event.location}</span></div>
         </div>
         <div class="price-row">
@@ -596,6 +681,13 @@ document.addEventListener('DOMContentLoaded', () => {
       window.location.href = 'index.html';
       return;
     }
+
+    void requestJson('api/event-views.php', {
+      method: 'POST',
+      body: JSON.stringify({ eventId: Number(event.id) })
+    }).catch(() => {
+      // Mantém a página funcional mesmo se o tracking de visualizações falhar.
+    });
 
     const session = getSession();
     const relatedEvents = getVisibleEvents()
@@ -654,7 +746,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
               <div class="event-detail-info-row">
                 <span class="event-detail-info-label">Data e Hora</span>
-                <strong>${formatEventDetailDate(event)}</strong>
+                <strong>${formatEventDetailDate(event)}${event.endDate ? ' — ' + formatApiDateLabel(event.endDate) : ''}</strong>
               </div>
 
               <div class="event-detail-info-row">
@@ -1416,20 +1508,13 @@ document.addEventListener('DOMContentLoaded', () => {
           throw new Error('O servidor não devolveu a sessão do utilizador.');
         }
 
-        const currentSession = getSession();
-        setSession({
-          ...response.user,
-          location: currentSession?.location ?? ''
-        });
+        setSession(response.user);
+        serverFavoritesState.loaded = false;
 
         try {
-          const favoritesResponse = await requestJson('api/favorites.php');
-            const favoriteIds = Array.isArray(favoritesResponse.favorites) ? favoritesResponse.favorites.map(normalizeEventId) : [];
-            serverFavoritesState.ids = favoriteIds;
-            serverFavoritesState.loaded = true;
-            setFavoriteIds(favoriteIds);
+          await loadServerFavorites();
         } catch {
-          // Mantém os favoritos locais caso a API não responda de imediato.
+          // Mantém a navegação funcional mesmo se os favoritos não carregarem de imediato.
         }
 
         updateAuthMessage(`Sessão iniciada como ${response.user.roleLabel}.`);
@@ -1450,7 +1535,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (backHomeBtn) {
       backHomeBtn.addEventListener('click', () => {
-        clearSession();
         window.location.href = 'index.html';
       });
     }
@@ -1495,18 +1579,11 @@ document.addEventListener('DOMContentLoaded', () => {
             throw new Error('O servidor não devolveu a nova conta.');
           }
 
-          const currentSession = getSession();
-          setSession({
-            ...response.user,
-            location: currentSession?.location ?? ''
-          });
+          setSession(response.user);
+          serverFavoritesState.loaded = false;
 
           try {
-            const favoritesResponse = await requestJson('api/favorites.php');
-            const favoriteIds = Array.isArray(favoritesResponse.favorites) ? favoritesResponse.favorites.map(normalizeEventId) : [];
-            serverFavoritesState.ids = favoriteIds;
-            serverFavoritesState.loaded = true;
-            setFavoriteIds(favoriteIds);
+            await loadServerFavorites();
           } catch {
             // Mantém a navegação funcional mesmo se a API de favoritos falhar.
           }
@@ -1607,16 +1684,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
                   <div class="profile-stat-grid">
                     <div class="profile-stat">
-                      <strong>3</strong>
-                      <span>eventos vistos</span>
+                      <strong id="profileFavoritesStat">0</strong>
+                      <span>favoritos guardados</span>
                     </div>
                     <div class="profile-stat">
-                      <strong>1</strong>
-                      <span>favorito nos favoritos</span>
+                      <strong id="profileUpcomingStat">0</strong>
+                      <span>eventos futuros</span>
                     </div>
                     <div class="profile-stat">
-                      <strong>2</strong>
-                      <span>check-ins feitos</span>
+                      <strong id="profileAvailableStat">0</strong>
+                      <span>eventos disponíveis</span>
                     </div>
                   </div>
                 </div>
@@ -1654,8 +1731,46 @@ document.addEventListener('DOMContentLoaded', () => {
       const historyList = document.getElementById('historyList');
       const profileLocationInput = document.getElementById('profileLocationInput');
       const profileLocationSaveBtn = document.getElementById('profileLocationSaveBtn');
+      const profileFavoritesStat = document.getElementById('profileFavoritesStat');
+      const profileUpcomingStat = document.getElementById('profileUpcomingStat');
+      const profileAvailableStat = document.getElementById('profileAvailableStat');
       const tabButtons = Array.from(document.querySelectorAll('[data-profile-tab]'));
       const panes = Array.from(document.querySelectorAll('[data-profile-pane]'));
+
+      const renderSavedEvents = () => {
+        if (!savedEventCard) {
+          return;
+        }
+
+        const favoriteIds = getFavoriteIds();
+        const favoriteEvents = favoriteIds
+          .map((favoriteId) => getVisibleEvents().find((event) => event.id === favoriteId))
+          .filter(Boolean);
+
+        if (savedEventCard) {
+          savedEventCard.innerHTML = favoriteEvents.length > 0
+            ? buildEventCard(favoriteEvents[0])
+            : '<p style="text-align: center; color: #666; padding: 20px;">Nenhum evento nos favoritos neste momento</p>';
+          bindEventCardActions(savedEventCard);
+        }
+
+        const savedEventsCount = document.getElementById('savedEventsCount');
+        if (savedEventsCount) {
+          savedEventsCount.textContent = String(favoriteEvents.length);
+        }
+
+        if (profileFavoritesStat) {
+          profileFavoritesStat.textContent = String(favoriteEvents.length);
+        }
+
+        if (profileUpcomingStat) {
+          profileUpcomingStat.textContent = String(getVisibleEvents().filter((event) => isUpcomingEvent(event)).length);
+        }
+
+        if (profileAvailableStat) {
+          profileAvailableStat.textContent = String(getVisibleEvents().length);
+        }
+      };
 
       // Clear placeholder elements
       if (savedEventCard) {
@@ -1664,6 +1779,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (historyList) {
         historyList.innerHTML = '<p style="text-align: center; color: #666; padding: 20px;">Nenhuma atividade registada</p>';
+      }
+
+      renderSavedEvents();
+
+      if (!serverFavoritesState.loaded) {
+        void loadServerFavorites().then(renderSavedEvents);
       }
 
       tabButtons.forEach((button) => {
@@ -1676,12 +1797,28 @@ document.addEventListener('DOMContentLoaded', () => {
       if (profileLocationSaveBtn && profileLocationInput) {
         profileLocationSaveBtn.addEventListener('click', () => {
           const updatedLocation = profileLocationInput.value.trim();
-          const updatedSession = { ...session, location: updatedLocation };
-          setSession(updatedSession);
-          profileLocationSaveBtn.textContent = 'Guardado';
-          window.setTimeout(() => {
-            profileLocationSaveBtn.textContent = 'Guardar';
-          }, 1200);
+          void (async () => {
+            try {
+              const response = await requestJson('api/me.php', {
+                method: 'PATCH',
+                body: JSON.stringify({ location: updatedLocation })
+              });
+
+              if (response?.user) {
+                setSession(response.user);
+              }
+
+              profileLocationSaveBtn.textContent = 'Guardado';
+              window.setTimeout(() => {
+                profileLocationSaveBtn.textContent = 'Guardar';
+              }, 1200);
+            } catch (error) {
+              profileLocationSaveBtn.textContent = error instanceof Error ? error.message : 'Não foi possível guardar';
+              window.setTimeout(() => {
+                profileLocationSaveBtn.textContent = 'Guardar';
+              }, 1600);
+            }
+          })();
         });
       }
 
@@ -2177,12 +2314,12 @@ document.addEventListener('DOMContentLoaded', () => {
       let selectedAdminOrganizerEmail = '';
       let selectedAdminOrganizerAction = 'suspend';
 
-      const getAdminEventById = (eventId) => getCreatedEvents().find((event) => event.id === eventId) ?? null;
+      const getAdminEventById = (eventId) => adminEventsState.items.find((event) => String(event.id) === String(eventId)) ?? null;
       const getAdminOrganizerByEmail = (email) => adminOrganizers.find((organizer) => organizer.email === email) ?? null;
 
-      const getAdminPendingEvents = () => getCreatedEvents().filter((event) => (event.status ?? 'pending') === 'pending');
+      const getAdminPendingEvents = () => adminEventsState.items.filter((event) => normalizeAdminEventStatus(event.status) === 'pending');
 
-      const getAdminPublishedEvents = () => getCreatedEvents().filter((event) => ['published', 'hidden'].includes(event.status ?? 'pending'));
+      const getAdminPublishedEvents = () => adminEventsState.items.filter((event) => ['active', 'hidden'].includes(normalizeAdminEventStatus(event.status)));
 
       const renderAdminModerationLists = () => {
         if (adminPendingEventsContainer) {
@@ -2193,7 +2330,7 @@ document.addEventListener('DOMContentLoaded', () => {
                   <div>
                     <strong>${event.title}</strong>
                     <p>Categoria: ${event.category}</p>
-                    <p>Data do evento: ${event.dateLabel ?? event.date ?? 'A definir'}</p>
+                    <p>Data do evento: ${event.dateLabel ?? event.date ?? 'A definir'}${event.endDateLabel ? ' — ' + event.endDateLabel : ''}</p>
                     <p>Organizador: ${event.organizerName ?? event.organizerEmail ?? 'Organizador'}</p>
                     <p>Submetido em: ${event.submittedAt ?? 'Pendente'}</p>
                   </div>
@@ -2210,7 +2347,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const publishedEvents = getAdminPublishedEvents();
           adminPublishedEventsTableBody.innerHTML = publishedEvents.length > 0
             ? publishedEvents.map((event) => {
-                const status = event.status ?? 'published';
+                const status = normalizeAdminEventStatus(event.status);
                 const toggleAction = status === 'hidden' ? 'show' : 'hide';
                 const toggleLabel = status === 'hidden' ? 'Mostrar evento' : 'Ocultar evento';
                 const toggleIcon = status === 'hidden'
@@ -2221,9 +2358,9 @@ document.addEventListener('DOMContentLoaded', () => {
                   <tr>
                     <td>${event.title}</td>
                     <td>${event.category}</td>
-                    <td>${event.dateLabel ?? event.date ?? 'A definir'}</td>
+                    <td>${event.dateLabel ?? event.date ?? 'A definir'}${event.endDateLabel ? ' — ' + event.endDateLabel : ''}</td>
                     <td>${event.organizerName ?? event.organizerEmail ?? 'Organizador'}</td>
-                    <td><span class="admin-pill ${status === 'hidden' ? 'warning' : 'success'}">${getEventStatusLabel(status)}</span></td>
+                    <td><span class="admin-pill ${status === 'hidden' || status === 'pending' ? 'warning' : 'success'}">${normalizeAdminEventStatusLabel(status)}</span></td>
                     <td>
                       <div class="admin-actions-group">
                         <button type="button" class="admin-icon-btn" aria-label="${toggleLabel}" data-admin-event-action="${toggleAction}" data-admin-event-id="${event.id}">${toggleIcon}</button>
@@ -2384,25 +2521,26 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
 
-        if (selectedAdminEventAction === 'reject' || selectedAdminEventAction === 'delete') {
-          setCreatedEvents(getCreatedEvents().filter((item) => item.id !== selectedAdminEventId));
-        } else {
-          const nextStatus = selectedAdminEventAction === 'hide' ? 'hidden' : 'published';
-          setCreatedEvents(getCreatedEvents().map((item) => {
-            if (item.id !== selectedAdminEventId) {
-              return item;
+        void (async () => {
+          try {
+            const response = await requestJson('api/admin/events.php', {
+              method: 'PATCH',
+              body: JSON.stringify({
+                eventId: Number(selectedAdminEventId),
+                action: selectedAdminEventAction
+              })
+            });
+
+            if (response?.ok) {
+              await loadAdminEvents();
+              renderAdminModerationLists();
             }
+          } catch {
+            // Mantém a interface funcional mesmo se a API não responder.
+          }
 
-            return {
-              ...item,
-              status: nextStatus,
-              statusLabel: getEventStatusLabel(nextStatus)
-            };
-          }));
-        }
-
-        renderAdminModerationLists();
-        closeAdminModal(adminEventActionModal);
+          closeAdminModal(adminEventActionModal);
+        })();
       };
 
       const openAdminUserProfile = (userEmail) => {
@@ -2489,6 +2627,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       renderAdminModerationLists();
       renderAdminOrganizersTable();
+      void loadAdminEvents().then(renderAdminModerationLists);
       void loadAdminOrganizers();
       void loadAdminUsers();
 
@@ -2564,7 +2703,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (session.accountType === 'organizador') {
-      const getOrganizerCreatedEvents = () => getCreatedEvents().filter((event) => event.organizerEmail === session.email);
+      const getOrganizerCreatedEvents = () => organizerEventsState.items.filter((event) => String(event.organizerEmail ?? '').toLowerCase() === String(session.email ?? '').toLowerCase());
 
       const formatOrganizerDateLabel = (dateValue, timeValue) => {
         const parsedDate = new Date(`${dateValue}T${timeValue || '20:00'}:00`);
@@ -2593,14 +2732,126 @@ document.addEventListener('DOMContentLoaded', () => {
             <td><span class="organizer-metric"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"></path></svg>${event.views ?? 0}</span></td>
             <td>
               <div class="organizer-actions-cell" aria-label="Ações do evento">
-                <button type="button" class="icon-btn" aria-label="Ver evento"><svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg></button>
-                <button type="button" class="icon-btn" aria-label="Editar evento"><svg viewBox="0 0 24 24"><path d="M4 20h4l10-10a2.5 2.5 0 0 0-4-4L4 16v4Z"></path></svg></button>
-                <button type="button" class="icon-btn" aria-label="Eliminar evento"><svg viewBox="0 0 24 24"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M6 7l1 13h10l1-13"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg></button>
+                <button type="button" class="icon-btn" data-organizer-event-id="${event.id}" data-organizer-event-action="view" aria-label="Ver evento">
+                  <svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                </button>
+                <button type="button" class="icon-btn" data-organizer-event-id="${event.id}" data-organizer-event-action="edit" aria-label="Editar evento">
+                  <svg viewBox="0 0 24 24"><path d="M4 20h4l10-10a2.5 2.5 0 0 0-4-4L4 16v4Z"></path></svg>
+                </button>
+                <button type="button" class="icon-btn" data-organizer-event-id="${event.id}" data-organizer-event-action="manage" aria-label="Gerir evento">
+                  <svg viewBox="0 0 24 24"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M6 7l1 13h10l1-13"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg>
+                </button>
               </div>
             </td>
           </tr>
         `).join('');
       };
+
+      const refreshOrganizerEvents = async () => {
+        await loadOrganizerEvents();
+        renderOrganizerTable();
+      };
+
+      // Organizer event action modal (inativar / eliminar)
+      const organizerEventActionModal = document.createElement('div');
+      organizerEventActionModal.className = 'admin-modal';
+      organizerEventActionModal.hidden = true;
+      organizerEventActionModal.innerHTML = `
+        <div class="admin-modal-backdrop" data-organizer-event-close></div>
+        <section class="admin-modal-card confirm" role="dialog" aria-modal="true" aria-labelledby="organizerEventActionModalTitle">
+          <button class="admin-modal-x" type="button" data-organizer-event-close aria-label="Fechar">×</button>
+          <h2 id="organizerEventActionModalTitle">Gerir evento</h2>
+          <p id="organizerEventActionModalText"></p>
+          <div class="admin-modal-actions">
+            <button class="admin-modal-secondary" type="button" data-organizer-event-close>Cancelar</button>
+            <button class="admin-modal-primary" type="button" id="organizerEventInactivateBtn">Inativar</button>
+            <button class="admin-modal-primary danger" type="button" id="organizerEventDeleteBtn">Eliminar</button>
+          </div>
+        </section>
+      `;
+      profileRoot.appendChild(organizerEventActionModal);
+
+      let selectedOrganizerEventId = '';
+
+      const openOrganizerEventAction = (eventId) => {
+        selectedOrganizerEventId = String(eventId);
+        const text = `Escolhe uma ação para o evento (ID ${selectedOrganizerEventId}): inativar ou eliminar definitivamente.`;
+        organizerEventActionModal.querySelector('#organizerEventActionModalText').textContent = text;
+        organizerEventActionModal.hidden = false;
+        document.body.style.overflow = 'hidden';
+      };
+
+      const closeOrganizerEventAction = () => {
+        organizerEventActionModal.hidden = true;
+        document.body.style.overflow = '';
+        selectedOrganizerEventId = '';
+      };
+
+      organizerEventActionModal.addEventListener('click', (e) => {
+        const t = e.target;
+        if (!(t instanceof Element)) return;
+        if (t.closest('[data-organizer-event-close]')) closeOrganizerEventAction();
+      });
+
+      const organizerEventInactivateBtn = organizerEventActionModal.querySelector('#organizerEventInactivateBtn');
+      const organizerEventDeleteBtn = organizerEventActionModal.querySelector('#organizerEventDeleteBtn');
+
+      organizerEventInactivateBtn?.addEventListener('click', async () => {
+        if (!selectedOrganizerEventId) return closeOrganizerEventAction();
+        try {
+          await requestJson('api/events.php', {
+            method: 'PATCH',
+            body: JSON.stringify({ eventId: Number(selectedOrganizerEventId), action: 'inactivate' })
+          });
+        } catch {
+          // ignore
+        }
+        await refreshOrganizerEvents();
+        closeOrganizerEventAction();
+      });
+
+      organizerEventDeleteBtn?.addEventListener('click', async () => {
+        if (!selectedOrganizerEventId) return closeOrganizerEventAction();
+        try {
+          await requestJson('api/events.php', {
+            method: 'PATCH',
+            body: JSON.stringify({ eventId: Number(selectedOrganizerEventId), action: 'delete' })
+          });
+        } catch {
+          // ignore
+        }
+        await refreshOrganizerEvents();
+        closeOrganizerEventAction();
+      });
+
+      // Organizer actions (view/edit/manage)
+      profileRoot.addEventListener('click', (ev) => {
+        const t = ev.target;
+        if (!(t instanceof Element)) return;
+        const btn = t.closest('[data-organizer-event-action][data-organizer-event-id]');
+        if (!btn) return;
+        const action = btn.getAttribute('data-organizer-event-action') ?? '';
+        const eventId = btn.getAttribute('data-organizer-event-id') ?? '';
+        if (!eventId) return;
+
+        if (action === 'view') {
+          window.location.href = getEventDetailUrl(eventId);
+          return;
+        }
+
+        if (action === 'edit') {
+          const eventObj = organizerEventsState.items.find((e) => String(e.id) === String(eventId));
+          if (eventObj) {
+            openOrganizerEdit(eventObj);
+          }
+          return;
+        }
+
+        if (action === 'manage') {
+          openOrganizerEventAction(eventId);
+          return;
+        }
+      });
 
       profileRoot.innerHTML = `
         <div class="page">
@@ -2670,6 +2921,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 <input id="organizerEventTime" type="time" value="20:00" required />
               </label>
 
+              <label class="organizer-date-field" id="organizerEndDateField">
+                Data fim
+                <input id="organizerEventEndDate" type="date" />
+              </label>
+
+              <label class="organizer-date-field" id="organizerEndTimeField">
+                Hora fim
+                <input id="organizerEventEndTime" type="time" value="22:00" />
+              </label>
+
               <fieldset class="organizer-recurring-field" id="organizerRecurringField" hidden>
                 <legend>Periodicidade</legend>
                 <div class="organizer-weekdays" id="organizerWeekdays">
@@ -2706,13 +2967,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
               <label class="organizer-image-field">
                 Imagens do evento
-                <input id="organizerEventImages" type="file" accept="image/*" multiple required />
+                <input id="organizerEventImages" type="file" accept="image/*" multiple />
                 <span class="organizer-image-hint">A primeira imagem selecionada será usada como vitrine do evento.</span>
               </label>
 
               <label>
                 Link para bilhetes
                 <input id="organizerEventTicketUrl" type="url" placeholder="https://..." required />
+              </label>
+
+              <label>
+                Descrição do evento
+                <textarea id="organizerEventDescription" rows="5" placeholder="Escreve uma descrição curta do evento (programa, artistas, público-alvo, etc.)"></textarea>
               </label>
 
               <div class="organizer-create-actions">
@@ -2780,6 +3046,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const organizerEventPriceValue = document.getElementById('organizerEventPriceValue');
       const organizerEventImages = document.getElementById('organizerEventImages');
       const organizerEventTicketUrl = document.getElementById('organizerEventTicketUrl');
+      const organizerEventDescription = document.getElementById('organizerEventDescription');
+      const organizerEventEndDate = document.getElementById('organizerEventEndDate');
+      const organizerEventEndTime = document.getElementById('organizerEventEndTime');
 
       const updateOrganizerCreateVisibility = () => {
         const isRecurring = organizerEventDateType?.value === 'recurring';
@@ -2806,6 +3075,16 @@ document.addEventListener('DOMContentLoaded', () => {
           organizerEventRecurringTime.required = isRecurring;
         }
 
+        if (organizerEventEndDate) {
+          organizerEventEndDate.required = !isRecurring;
+          organizerEventEndDate.closest('label')?.classList.toggle('hidden', isRecurring);
+        }
+
+        if (organizerEventEndTime) {
+          organizerEventEndTime.required = !isRecurring;
+          organizerEventEndTime.closest('label')?.classList.toggle('hidden', isRecurring);
+        }
+
         const isPaid = organizerEventPriceType?.value === 'Pago';
         if (organizerPriceValueField) {
           organizerPriceValueField.hidden = !isPaid;
@@ -2813,6 +3092,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (organizerEventPriceValue) {
           organizerEventPriceValue.required = isPaid;
+        }
+        // Mostrar/ocultar campo de link para bilhetes conforme tipo de preço
+        // Identificar o elemento <label> que contém o input de ticket de forma robusta
+        if (organizerEventTicketUrl && organizerCreateForm) {
+          const labels = Array.from(organizerCreateForm.querySelectorAll('label'));
+          const ticketLabel = labels.find((lbl) => lbl.contains(organizerEventTicketUrl));
+          if (ticketLabel) {
+            ticketLabel.style.display = isPaid ? '' : 'none';
+            ticketLabel.hidden = !isPaid;
+          }
+          organizerEventTicketUrl.required = isPaid;
         }
       };
 
@@ -2866,23 +3156,62 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (organizerCreateForm) {
+        let editingOrganizerEventId = null;
+
+        const openOrganizerEdit = (eventObj) => {
+          editingOrganizerEventId = String(eventObj.id ?? '');
+          organizerEventTitle.value = eventObj.title ?? '';
+          organizerEventCategory.value = eventObj.category ?? 'Outros';
+          if (eventObj.isRecurring) {
+            organizerEventDateType.value = 'recurring';
+            organizerRecurringField.hidden = false;
+            organizerRecurringField.classList.remove('is-hidden');
+            organizerEventRecurringTime.value = eventObj.recurringPattern || '20:00';
+            organizerCreateForm.querySelectorAll('input[name="organizerRecurringDays"]')?.forEach((input) => {
+              input.checked = (eventObj.recurringDays ?? '').split(',').includes(input.value);
+            });
+          } else {
+            organizerEventDateType.value = 'fixed';
+            organizerEventDate.value = (eventObj.eventDate ?? '').slice(0,10);
+            organizerEventTime.value = (new Date(eventObj.eventDate)).toTimeString().slice(0,5) || '20:00';
+            if (eventObj.endDate) {
+              try {
+                organizerEventEndDate.value = (eventObj.endDate ?? '').slice(0,10);
+                organizerEventEndTime.value = (new Date(eventObj.endDate)).toTimeString().slice(0,5) || '22:00';
+              } catch (e) {
+                // silenciar se formato inesperado
+              }
+            }
+          }
+          organizerEventLocation.value = eventObj.location ?? '';
+          organizerEventPriceType.value = eventObj.priceType ?? 'Pago';
+          organizerEventPriceValue.value = eventObj.price ?? '';
+          organizerEventTicketUrl.value = eventObj.ticketUrl ?? '';
+          // Não preencher descrição ao editar — descrição apenas ao criar um novo evento
+          toggleOrganizerCreatePanel(true);
+          updateOrganizerCreateVisibility();
+        };
+
         organizerCreateForm.addEventListener('submit', async (event) => {
           event.preventDefault();
 
           const title = organizerEventTitle?.value.trim() ?? '';
+          const description = organizerEventDescription?.value.trim() ?? '';
           const category = organizerEventCategory?.value ?? 'Outros';
           const dateType = organizerEventDateType?.value ?? 'fixed';
           const location = organizerEventLocation?.value.trim() ?? '';
           const priceType = organizerEventPriceType?.value ?? 'Gratuito';
           const ticketUrl = organizerEventTicketUrl?.value.trim() ?? '';
-          const imageFiles = Array.from(organizerEventImages?.files ?? []);
           const selectedRecurringDays = Array.from(document.querySelectorAll('input[name="organizerRecurringDays"]'))
             .filter((input) => input.checked)
             .map((input) => input.value);
 
-          if (!title || !location || !ticketUrl || imageFiles.length === 0) {
+          const isPaid = priceType === 'Pago';
+          if (!title || !location || (isPaid && !ticketUrl)) {
             if (organizerCreateMessage) {
-              organizerCreateMessage.textContent = 'Preenche o título, a localização, o link de bilhetes e adiciona pelo menos uma imagem.';
+              organizerCreateMessage.textContent = isPaid
+                ? 'Preenche o título, a localização e o link de bilhetes.'
+                : 'Preenche o título e a localização.';
             }
             return;
           }
@@ -2911,6 +3240,8 @@ document.addEventListener('DOMContentLoaded', () => {
           } else {
             const dateValue = organizerEventDate?.value;
             const timeValue = organizerEventTime?.value || '20:00';
+            const endDateValue = organizerEventEndDate?.value;
+            const endTimeValue = organizerEventEndTime?.value || '22:00';
             if (!dateValue) {
               if (organizerCreateMessage) {
                 organizerCreateMessage.textContent = 'Seleciona uma data válida para o evento.';
@@ -2918,88 +3249,103 @@ document.addEventListener('DOMContentLoaded', () => {
               return;
             }
 
-            eventDate = new Date(`${dateValue}T${timeValue}:00`);
+            if (!endDateValue) {
+              if (organizerCreateMessage) {
+                organizerCreateMessage.textContent = 'Seleciona a data de fim do evento.';
+              }
+              return;
+            }
+
+            const startDt = new Date(`${dateValue}T${timeValue}:00`);
+            const endDt = new Date(`${endDateValue}T${endTimeValue}:00`);
+            if (Number.isNaN(startDt.getTime()) || Number.isNaN(endDt.getTime())) {
+              if (organizerCreateMessage) {
+                organizerCreateMessage.textContent = 'Datas inválidas.';
+              }
+              return;
+            }
+
+            if (endDt.getTime() < startDt.getTime()) {
+              if (organizerCreateMessage) {
+                organizerCreateMessage.textContent = 'A data de fim não pode ser anterior à data de início.';
+              }
+              return;
+            }
+
+            eventDate = startDt;
             dateLabel = formatOrganizerDateLabel(dateValue, timeValue);
             dateBucket = getDateBucketForDateTime(eventDate.getTime());
           }
 
-          let imageUrls = [];
+          // montar endDate para envio
+          let endDatePayload = '';
+          if (dateType !== 'recurring') {
+            const endDateVal = organizerEventEndDate?.value;
+            const endTimeVal = organizerEventEndTime?.value || '22:00';
+            if (endDateVal) {
+              const endDtForPayload = new Date(`${endDateVal}T${endTimeVal}:00`);
+              if (!Number.isNaN(endDtForPayload.getTime())) {
+                endDatePayload = formatApiDateTime(endDtForPayload);
+              }
+            }
+          }
+
           try {
-            imageUrls = await readFilesAsDataUrls(imageFiles);
-          } catch {
+            if (editingOrganizerEventId) {
+              await requestJson('api/events.php', {
+                method: 'PATCH',
+                body: JSON.stringify({
+                  action: 'update',
+                  eventId: Number(editingOrganizerEventId),
+                  title,
+                  startDate: formatApiDateTime(eventDate),
+                  endDate: endDatePayload,
+                  price: priceType === 'Pago' ? Number(organizerEventPriceValue?.value || 0) : 0,
+                  ticketUrl,
+                  category,
+                  locationStreet: location,
+                  locationCity: getDistrictKey(location) ?? 'Lisboa',
+                  locationDistrict: getDistrictKey(location) ?? 'Lisboa',
+                  isRecurring,
+                  recurringPattern: isRecurring ? 'semanal' : '',
+                  recurringDays: isRecurring ? recurringDays.join(',') : ''
+                })
+              });
+            } else {
+              await requestJson('api/events.php', {
+                method: 'POST',
+                body: JSON.stringify({
+                  title,
+                  description,
+                  startDate: formatApiDateTime(eventDate),
+                  endDate: endDatePayload,
+                  price: priceType === 'Pago' ? Number(organizerEventPriceValue?.value || 0) : 0,
+                  ticketUrl,
+                  category,
+                  locationStreet: location,
+                  locationCity: getDistrictKey(location) ?? 'Lisboa',
+                  locationDistrict: getDistrictKey(location) ?? 'Lisboa',
+                  isRecurring,
+                  recurringPattern: isRecurring ? 'semanal' : '',
+                  recurringDays: isRecurring ? recurringDays.join(',') : ''
+                })
+              });
+            }
+          } catch (error) {
             if (organizerCreateMessage) {
-              organizerCreateMessage.textContent = 'Não foi possível ler uma das imagens selecionadas.';
+              organizerCreateMessage.textContent = error instanceof Error && error.message
+                ? error.message
+                : 'Não foi possível criar o evento neste momento.';
             }
             return;
           }
 
-          const organizerLocationDistrict = getDistrictKey(location) ?? getSession()?.location ?? 'Lisboa';
-          const organizerLocationCity = getDistrictKey(location) ?? organizerLocationDistrict;
-
-          let createdEventServerId = null;
-          try {
-            const response = await requestJson('api/events.php', {
-              method: 'POST',
-              body: JSON.stringify({
-                title,
-                description: 'Evento criado através do painel do organizador.',
-                startDate: eventDate.toISOString(),
-                endDate: '',
-                price: priceType === 'Pago' ? Number(organizerEventPriceValue?.value || 0) : 0,
-                ticketUrl,
-                category,
-                locationStreet: location,
-                locationCity: organizerLocationCity,
-                locationDistrict: organizerLocationDistrict,
-                images: imageUrls,
-                isRecurring,
-                recurringPattern: isRecurring ? 'semanal' : '',
-                recurringDays: isRecurring ? recurringDays.join(',') : ''
-              })
-            });
-
-            createdEventServerId = response.eventId ?? null;
-          } catch {
-            createdEventServerId = null;
-          }
-
-          const newEvent = {
-            id: createdEventServerId ? String(createdEventServerId) : `event-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            title,
-            category,
-            dateLabel,
-            dateBucket,
-            eventDate: eventDate.toISOString(),
-            location,
-            city: getDistrictKey(location) ?? '',
-            priceLabel: priceType === 'Pago' ? `€${Number(organizerEventPriceValue?.value || 0).toFixed(0)}` : 'Entrada Gratuita',
-            priceType,
-            status: 'pending',
-            statusLabel: 'Pendente',
-            organizerName: session.name,
-            submittedAt: new Intl.DateTimeFormat('pt-PT', {
-              day: '2-digit',
-              month: '2-digit',
-              year: 'numeric'
-            }).format(new Date()),
-            views: 0,
-            image: imageUrls[0],
-            images: imageUrls,
-            isRecurring,
-            recurringDays,
-            ticketUrl,
-            organizerEmail: session.email,
-            description: 'Evento criado através do painel do organizador.'
-          };
-
-          const updatedEvents = [newEvent, ...getCreatedEvents()];
-          setCreatedEvents(updatedEvents);
-
           if (organizerCreateMessage) {
-            organizerCreateMessage.textContent = 'Evento criado com sucesso.';
+            organizerCreateMessage.textContent = 'Evento criado com sucesso e pendente de aprovação.';
           }
 
           organizerCreateForm.reset();
+          editingOrganizerEventId = null;
           if (organizerEventPriceType) {
             organizerEventPriceType.value = 'Pago';
           }
@@ -3017,12 +3363,12 @@ document.addEventListener('DOMContentLoaded', () => {
           });
 
           updateOrganizerCreateVisibility();
-          renderOrganizerTable();
+          await refreshOrganizerEvents();
         });
       }
 
       updateOrganizerCreateVisibility();
-      renderOrganizerTable();
+      void refreshOrganizerEvents();
 
       return;
     }
@@ -3030,15 +3376,34 @@ document.addEventListener('DOMContentLoaded', () => {
     window.location.href = 'index.html';
   };
 
-  if (pageType === 'event') {
-    renderEventDetailPage();
+  void (async () => {
+    await loadSessionFromApi();
+
+    if (pageType === 'event' || pageType === 'home' || pageType === 'events' || pageType === 'favorites') {
+      await loadServerEvents();
+    }
+
+    const session = getSession();
+    if (session?.accountType === 'lambda') {
+      await loadServerFavorites();
+    }
+
+    if (session?.accountType === 'admin') {
+      await loadAdminEvents();
+    }
+
+    if (session?.accountType === 'organizador') {
+      await loadOrganizerEvents();
+    }
+
+    if (pageType === 'event') {
+      renderEventDetailPage();
+      renderLoginPage();
+      return;
+    }
+
+    renderListingPage();
     renderLoginPage();
-    return;
-  }
-
-  renderListingPage();
-  renderLoginPage();
-  renderProfilePage();
-
-  void loadServerEvents();
+    renderProfilePage();
+  })();
 });

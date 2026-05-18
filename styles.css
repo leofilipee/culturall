@@ -1567,6 +1567,30 @@ select {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 
+.organizer-create-form textarea {
+  width: 100%;
+  min-height: 110px;
+  border: 1px solid rgba(174, 145, 112, 0.18);
+  border-radius: 12px;
+  background: rgba(239, 226, 209, 0.96);
+  color: var(--text);
+  padding: 12px;
+  outline: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  resize: vertical;
+  font: inherit;
+}
+
+/* Faz com que o label que contém o textarea ocupe a linha inteira */
+.organizer-create-form label:has(textarea) {
+  grid-column: 1 / -1;
+}
+
+/* Fallback para navegadores sem :has(): assume posição do textarea como nono elemento */
+.organizer-create-form label:nth-child(9) {
+  grid-column: 1 / -1;
+}
+
 .organizer-create-form input[type="file"] {
   padding: 10px 12px;
   height: auto;

@@ -51,6 +51,64 @@ function culturall_pdo(): PDO
     return $pdo;
 }
 
+function culturall_column_exists(PDO $pdo, string $table, string $column): bool
+{
+    static $cache = [];
+
+    $cacheKey = strtolower($table . '.' . $column);
+    if (array_key_exists($cacheKey, $cache)) {
+        return $cache[$cacheKey];
+    }
+
+    try {
+        $statement = $pdo->prepare(
+            'SELECT 1
+             FROM information_schema.columns
+             WHERE table_schema = DATABASE()
+               AND table_name = :tableName
+               AND column_name = :columnName
+             LIMIT 1'
+        );
+        $statement->execute([
+            'tableName' => $table,
+            'columnName' => $column,
+        ]);
+
+        $cache[$cacheKey] = (bool) $statement->fetchColumn();
+    } catch (Throwable) {
+        $cache[$cacheKey] = false;
+    }
+
+    return $cache[$cacheKey];
+}
+
+function culturall_table_exists(PDO $pdo, string $table): bool
+{
+    static $cache = [];
+
+    $cacheKey = strtolower($table);
+    if (array_key_exists($cacheKey, $cache)) {
+        return $cache[$cacheKey];
+    }
+
+    try {
+        $statement = $pdo->prepare(
+            'SELECT 1
+             FROM information_schema.tables
+             WHERE table_schema = DATABASE()
+               AND table_name = :tableName
+             LIMIT 1'
+        );
+        $statement->execute(['tableName' => $table]);
+
+        $cache[$cacheKey] = (bool) $statement->fetchColumn();
+    } catch (Throwable) {
+        $cache[$cacheKey] = false;
+    }
+
+    return $cache[$cacheKey];
+}
+
 function culturall_json_response(array $payload, int $statusCode = 200): never
 {
     http_response_code($statusCode);

@@ -27,6 +27,7 @@ CREATE TABLE utilizador (
     utinicio DATE NOT NULL,
     utcriadoem DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     utestado ENUM('ativo', 'inativo') NOT NULL DEFAULT 'ativo',
+    utlocalizacao VARCHAR(120),
     uttipo INT NOT NULL,
     utfotoperfil LONGBLOB,
     PRIMARY KEY (idutilizador),
@@ -105,7 +106,7 @@ CREATE TABLE evento (
     evdatafim DATETIME,
     evvalor DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     evlinkbilhete VARCHAR(255),
-    evestado ENUM('pendente', 'publicado', 'oculto', 'recusado') NOT NULL DEFAULT 'pendente',
+    evestado ENUM('pendente', 'ativo', 'inativo', 'publicado', 'oculto', 'recusado') NOT NULL DEFAULT 'pendente',
     evdatasubmissao DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     evdataaprovacao DATETIME,
     evmotivorecusa VARCHAR(300),
@@ -137,12 +138,31 @@ CREATE TABLE evento (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ------------------------------------------------------------
+-- Tabela: eventovisualizacao
+-- ------------------------------------------------------------
+CREATE TABLE eventovisualizacao (
+    ideventovisualizacao INT NOT NULL AUTO_INCREMENT,
+    evvidevento INT NOT NULL,
+    evvidutilizador INT NULL,
+    evvdatahora DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (ideventovisualizacao),
+    KEY idx_eventovisualizacao_evento (evvidevento),
+    KEY idx_eventovisualizacao_utilizador (evvidutilizador),
+    CONSTRAINT fk_evv_ev FOREIGN KEY (evvidevento) REFERENCES evento(idevento)
+        ON UPDATE CASCADE
+        ON DELETE CASCADE,
+    CONSTRAINT fk_evv_ut FOREIGN KEY (evvidutilizador) REFERENCES utilizador(idutilizador)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
 -- Tabela: imagem
 -- ------------------------------------------------------------
 CREATE TABLE imagem (
     idimagem INT NOT NULL AUTO_INCREMENT,
     imglegenda VARCHAR(300),
-    imgurl VARCHAR(255) NOT NULL,
+    imgurl LONGTEXT NOT NULL,
     imgtipo ENUM('capa', 'galeria') NOT NULL DEFAULT 'galeria',
     imgidevento INT NOT NULL,
     PRIMARY KEY (idimagem),
