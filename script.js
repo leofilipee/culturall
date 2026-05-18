@@ -2535,10 +2535,17 @@ document.addEventListener('DOMContentLoaded', () => {
               await loadAdminEvents();
               renderAdminModerationLists();
             }
-          } catch {
-            // Mantém a interface funcional mesmo se a API não responder.
+          } catch (err) {
+            const message = err instanceof Error ? err.message : 'Erro desconhecido ao processar o pedido.';
+            if (adminEventActionModalText) {
+              adminEventActionModalText.textContent = message;
+            } else {
+              alert(message);
+            }
+            return;
           }
 
+          // Fechar modal apenas após sucesso
           closeAdminModal(adminEventActionModal);
         })();
       };

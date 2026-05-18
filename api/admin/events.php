@@ -5,18 +5,37 @@ require __DIR__ . '/../bootstrap.php';
 
 $pdo = culturall_pdo();
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-$adminUser = culturall_require_roles(['admin']);
+
+// Require login first. Admin-only actions remain restricted, but organizers
+// will be allowed to act on their own events (approve/reject/hide/show/delete if owner).
+$currentUser = culturall_require_login();
 $hasViewsTable = culturall_table_exists($pdo, 'eventovisualizacao');
 
-$adminLookup = $pdo->prepare(
-    'SELECT a.idadministrador
-     FROM administrador a
-     INNER JOIN utilizador u ON u.idutilizador = a.adidutilizador
-     WHERE u.utemail = :email
-     LIMIT 1'
-);
-$adminLookup->execute(['email' => (string) ($adminUser['email'] ?? '')]);
-$adminId = (int) ($adminLookup->fetchColumn() ?: 0);
+$isAdmin = (($currentUser['accountType'] ?? '') === 'admin');
+$organizerIdForUser = 0;
+if (!$isAdmin) {
+    // try to resolve if the user is an organizer
+    $orgLookup = $pdo->prepare('SELECT idorganizador, orgemail FROM organizador WHERE orgemail = :email LIMIT 1');
+    $orgLookup->execute(['email' => (string) ($currentUser['email'] ?? '')]);
+    $row = $orgLookup->fetch(PDO::FETCH_ASSOC);
+    if ($row && isset($row['idorganizador'])) {
+        $organizerIdForUser = (int) $row['idorganizador'];
+    }
+}
+
+// If user is admin, try to fetch admin id for auditing (optional)
+$adminId = 0;
+if ($isAdmin) {
+    $adminLookup = $pdo->prepare(
+        'SELECT a.idadministrador
+         FROM administrador a
+         INNER JOIN utilizador u ON u.idutilizador = a.adidutilizador
+         WHERE u.utemail = :email
+         LIMIT 1'
+    );
+    $adminLookup->execute(['email' => (string) ($currentUser['email'] ?? '')]);
+    $adminId = (int) ($adminLookup->fetchColumn() ?: 0);
+}
 
 if ($method === 'GET') {
     $statusFilter = strtolower(trim((string) ($_GET['status'] ?? 'all')));
@@ -57,9 +76,20 @@ if ($method === 'GET') {
         . $viewsJoin;
 
     $params = [];
+    $whereClauses = [];
     if ($statusFilter !== 'all') {
-        $sql .= ' WHERE e.evestado = :status';
+        $whereClauses[] = 'e.evestado = :status';
         $params['status'] = $statusFilter;
+    }
+
+    // If the current user is not an admin, limit results to events owned by that organizer
+    if (!$isAdmin && $organizerIdForUser > 0) {
+        $whereClauses[] = 'o.idorganizador = :organizerId';
+        $params['organizerId'] = $organizerIdForUser;
+    }
+
+    if (count($whereClauses) > 0) {
+        $sql .= ' WHERE ' . implode(' AND ', $whereClauses);
     }
 
     if ($hasViewsTable) {
@@ -130,10 +160,22 @@ if ($method === 'PATCH') {
     $pdo->beginTransaction();
 
     try {
-        $lookup = $pdo->prepare('SELECT idevento FROM evento WHERE idevento = :eventId LIMIT 1');
+        $lookup = $pdo->prepare('SELECT idevento, evidorganizador FROM evento WHERE idevento = :eventId LIMIT 1');
         $lookup->execute(['eventId' => $eventId]);
-        if (!$lookup->fetchColumn()) {
+        $found = $lookup->fetch(PDO::FETCH_ASSOC);
+        if (!$found) {
             throw new RuntimeException('Evento não encontrado.');
+        }
+
+        // If the current user is not an admin, ensure they are the organizer owner of the event
+        $eventOrganizerId = (int) ($found['evidorganizador'] ?? 0);
+        if (!$isAdmin) {
+            if ($organizerIdForUser <= 0 || $eventOrganizerId !== $organizerIdForUser) {
+                culturall_json_response([
+                    'ok' => false,
+                    'message' => 'Permissão insuficiente para gerir este evento.'
+                ], 403);
+            }
         }
 
         if ($action === 'delete') {
