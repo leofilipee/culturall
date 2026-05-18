@@ -1,1 +1,0 @@
-Temporary note: Added server-side validation for evestado values in admin/events.php and events.php to avoid SQLSTATE 1265. Ensure to test on Railway.

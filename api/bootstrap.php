@@ -82,6 +82,52 @@ function culturall_column_exists(PDO $pdo, string $table, string $column): bool
     return $cache[$cacheKey];
 }
 
+function culturall_ensure_longtext_column(PDO $pdo, string $table, string $column): void
+{
+    static $checked = [];
+
+    $cacheKey = strtolower($table . '.' . $column);
+    if (($checked[$cacheKey] ?? false) === true) {
+        return;
+    }
+
+    $checked[$cacheKey] = true;
+
+    if (!preg_match('/^[a-zA-Z0-9_]+$/', $table) || !preg_match('/^[a-zA-Z0-9_]+$/', $column)) {
+        return;
+    }
+
+    try {
+        $statement = $pdo->prepare(
+            'SELECT DATA_TYPE, IS_NULLABLE
+             FROM information_schema.columns
+             WHERE table_schema = DATABASE()
+               AND table_name = :tableName
+               AND column_name = :columnName
+             LIMIT 1'
+        );
+        $statement->execute([
+            'tableName' => $table,
+            'columnName' => $column,
+        ]);
+
+        $columnInfo = $statement->fetch(PDO::FETCH_ASSOC);
+        if (!$columnInfo) {
+            return;
+        }
+
+        if (strtolower((string) ($columnInfo['DATA_TYPE'] ?? '')) === 'longtext') {
+            return;
+        }
+
+        $nullable = strtoupper((string) ($columnInfo['IS_NULLABLE'] ?? 'NO')) === 'YES' ? 'NULL' : 'NOT NULL';
+        $pdo->exec(sprintf('ALTER TABLE `%s` MODIFY COLUMN `%s` LONGTEXT %s', $table, $column, $nullable));
+    } catch (Throwable) {
+        // If the Railway user has no DDL privileges, we keep the app running and
+        // let the insert fail with a clear database error instead of a silent bug.
+    }
+}
+
 function culturall_table_exists(PDO $pdo, string $table): bool
 {
     static $cache = [];

@@ -6,6 +6,11 @@ require __DIR__ . '/bootstrap.php';
 $pdo = culturall_pdo();
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $hasViewsTable = culturall_table_exists($pdo, 'eventovisualizacao');
+$hasImageTable = culturall_table_exists($pdo, 'imagem');
+
+if ($hasImageTable) {
+    culturall_ensure_longtext_column($pdo, 'imagem', 'imgurl');
+}
 
 $normalizeEventImageSource = static function (mixed $value): ?string {
     $imageSource = trim((string) $value);
