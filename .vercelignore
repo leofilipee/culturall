@@ -1,0 +1,11 @@
+# Dependencies are installed by Vercel in its Linux build environment.
+node_modules/
+
+# Git metadata is not needed for deployment.
+.git/
+.git/**
+
+# Local and secret configuration must never be uploaded.
+.env
+.env.*
+.vercel/

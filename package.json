@@ -1,0 +1,13 @@
+{
+  "name": "culturall",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Plataforma Cultur'All preparada para Vercel",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "mysql2": "^3.11.5"
+  }
+}

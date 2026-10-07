@@ -1,0 +1,6 @@
+# Dependencies and local Vercel state are not committed.
+node_modules/
+.env
+.env.local
+.env.*.local
+.vercel/

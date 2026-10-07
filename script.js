@@ -52,7 +52,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const loadSessionFromApi = async () => {
     try {
-      const response = await requestJson('api/me.php');
+      const response = await requestJson('/api/me');
       currentSession = response?.user ?? null;
     } catch {
       currentSession = null;
@@ -62,7 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   const syncLogoutRequest = () => {
-    void fetch('api/logout.php', {
+    void fetch('/api/logout', {
       method: 'POST',
       credentials: 'same-origin'
     }).catch(() => {
@@ -251,7 +251,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const loadServerEvents = async (status = 'published') => {
     try {
-      const response = await requestJson(`api/events.php?status=${encodeURIComponent(status)}`);
+      const response = await requestJson(`/api/events?status=${encodeURIComponent(status)}`);
       if (Array.isArray(response.events)) {
         serverEventsState.items = response.events.map(normalizeServerEvent);
       }
@@ -265,7 +265,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const loadServerFavorites = async () => {
     try {
-      const response = await requestJson('api/favorites.php');
+      const response = await requestJson('/api/favorites');
       const favoriteIds = Array.isArray(response.favorites) ? response.favorites.map(normalizeEventId) : [];
       serverFavoritesState.ids = favoriteIds;
       serverFavoritesState.source = 'server';
@@ -280,7 +280,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const loadAdminEvents = async () => {
     try {
-      const response = await requestJson('api/admin/events.php?status=all');
+      const response = await requestJson('/api/admin/events?status=all');
       adminEventsState.items = Array.isArray(response.events)
         ? response.events.map((event) => ({
             ...event,
@@ -298,7 +298,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const loadOrganizerEvents = async () => {
     try {
-      const response = await requestJson('api/events.php?scope=own&status=all');
+      const response = await requestJson('/api/events?scope=own&status=all');
       organizerEventsState.items = Array.isArray(response.events) ? response.events : [];
     } catch {
       organizerEventsState.items = [];
@@ -379,7 +379,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (session) {
       try {
-        const response = await requestJson('api/favorites.php', {
+        const response = await requestJson('/api/favorites', {
           method: 'POST',
           body: JSON.stringify({ eventId: Number(eventId) })
         });
@@ -695,7 +695,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    void requestJson('api/event-views.php', {
+    void requestJson('/api/event-views', {
       method: 'POST',
       body: JSON.stringify({ eventId: Number(event.id) })
     }).catch(() => {
@@ -1512,7 +1512,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const password = passwordInput.value;
 
       try {
-        const response = await requestJson('api/login.php', {
+        const response = await requestJson('/api/login', {
           method: 'POST',
           body: JSON.stringify({ email, password })
         });
@@ -1571,7 +1571,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const accountType = getSelectedRegisterAccountType();
 
         try {
-          const response = await requestJson('api/register.php', {
+          const response = await requestJson('/api/register', {
             method: 'POST',
             body: JSON.stringify({ name, email, password, confirmPassword, accountType })
           });
@@ -1812,7 +1812,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const updatedLocation = profileLocationInput.value.trim();
           void (async () => {
             try {
-              const response = await requestJson('api/me.php', {
+              const response = await requestJson('/api/me', {
                 method: 'PATCH',
                 body: JSON.stringify({ location: updatedLocation })
               });
@@ -1960,7 +1960,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const loadAdminUsers = async () => {
         try {
-          const response = await requestJson('api/admin/users.php');
+          const response = await requestJson('/api/admin/users');
           if (Array.isArray(response.users)) {
             adminUsers = response.users.map(mapAdminUser);
             renderAdminUsersTable();
@@ -1972,7 +1972,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const loadAdminOrganizers = async () => {
         try {
-          const response = await requestJson('api/admin/organizers.php');
+          const response = await requestJson('/api/admin/organizers');
           if (Array.isArray(response.organizers)) {
             adminOrganizers = response.organizers.map((organizer) => mapAdminOrganizer({
               name: organizer.name,
@@ -2508,7 +2508,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         void (async () => {
           try {
-            await requestJson('api/admin/organizers.php', {
+            await requestJson('/api/admin/organizers', {
               method: 'PATCH',
               body: JSON.stringify({
                 email: selectedAdminOrganizerEmail,
@@ -2536,7 +2536,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         void (async () => {
           try {
-            const response = await requestJson('api/admin/events.php', {
+            const response = await requestJson('/api/admin/events', {
               method: 'PATCH',
               body: JSON.stringify({
                 eventId: Number(selectedAdminEventId),
@@ -2624,7 +2624,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         void (async () => {
           try {
-            await requestJson('api/admin/users.php', {
+            await requestJson('/api/admin/users', {
               method: 'PATCH',
               body: JSON.stringify({
                 email: selectedAdminUserEmail,
@@ -2819,7 +2819,7 @@ document.addEventListener('DOMContentLoaded', () => {
       organizerEventInactivateBtn?.addEventListener('click', async () => {
         if (!selectedOrganizerEventId) return closeOrganizerEventAction();
         try {
-          await requestJson('api/events.php', {
+          await requestJson('/api/events', {
             method: 'PATCH',
             body: JSON.stringify({ eventId: Number(selectedOrganizerEventId), action: 'inactivate' })
           });
@@ -2833,7 +2833,7 @@ document.addEventListener('DOMContentLoaded', () => {
       organizerEventDeleteBtn?.addEventListener('click', async () => {
         if (!selectedOrganizerEventId) return closeOrganizerEventAction();
         try {
-          await requestJson('api/events.php', {
+          await requestJson('/api/events', {
             method: 'PATCH',
             body: JSON.stringify({ eventId: Number(selectedOrganizerEventId), action: 'delete' })
           });
@@ -3325,7 +3325,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
           try {
             if (editingOrganizerEventId) {
-              await requestJson('api/events.php', {
+              await requestJson('/api/events', {
                 method: 'PATCH',
                 body: JSON.stringify({
                   action: 'update',
@@ -3346,7 +3346,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 })
               });
             } else {
-              await requestJson('api/events.php', {
+              await requestJson('/api/events', {
                 method: 'POST',
                 body: JSON.stringify({
                   title,
