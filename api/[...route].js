@@ -152,7 +152,12 @@ async function eventRows(connection, status, ownEmail) {
 
 async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  const route = Array.isArray(req.query.route) ? req.query.route.join('/') : String(req.query.route || '').replace(/^\/+|\/+$/g, '');
+  const queryRoute = Array.isArray(req.query?.route)
+    ? req.query.route.join('/')
+    : String(req.query?.route || '');
+  const requestPath = String(req.url || '').split('?')[0];
+  const pathRoute = requestPath.replace(/^\/+/, '').replace(/^api\/+/i, '');
+  const route = (pathRoute || queryRoute).replace(/^\/+|\/+$/g, '');
   const db = getPool();
   const body = parseBody(req);
 
