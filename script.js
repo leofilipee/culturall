@@ -80,9 +80,16 @@ document.addEventListener('DOMContentLoaded', () => {
       ...options
     });
 
-    const payload = await response.json().catch(() => null);
+    const responseText = await response.text();
+    let payload = null;
+    try {
+      payload = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      throw new Error(`Resposta inválida do servidor (HTTP ${response.status}).`);
+    }
+
     if (!payload || typeof payload !== 'object') {
-      throw new Error('Resposta inválida do servidor.');
+      throw new Error(`Resposta inválida do servidor (HTTP ${response.status}).`);
     }
 
     if (!response.ok) {

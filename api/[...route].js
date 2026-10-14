@@ -357,5 +357,16 @@ async function handler(req, res) {
 }
 
 module.exports = async (req, res) => {
-  try { await handler(req, res); } catch (error) { console.error(error); json(res, 500, { ok: false, message: 'Erro interno do servidor.' }); }
+  try {
+    await handler(req, res);
+  } catch (error) {
+    console.error(error);
+    if (!res.headersSent) {
+      json(res, 500, {
+        ok: false,
+        message: 'Erro interno do servidor.',
+        detail: error instanceof Error ? error.message : 'Erro desconhecido.'
+      });
+    }
+  }
 };
