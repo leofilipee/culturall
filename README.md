@@ -40,6 +40,7 @@ A Vercel lê o [`.vercelignore`](.vercelignore), exclui `node_modules` e `.git`,
 ## Observação sobre credenciais
 
 As credenciais devem ser geridas através da base de dados importada (`bdd/SeedData.sql`). Não inclua credenciais fictícias no código-fonte.
+As palavras-passe são guardadas com bcrypt (custo 12). As contas antigas que ainda tenham texto simples são migradas automaticamente para bcrypt depois de um login válido; novas contas nunca são guardadas em texto simples.
 
 ## Registo de Organizadores
 

@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const bcrypt = require('bcryptjs');
 const mysql = require('mysql2/promise');
 
+const PASSWORD_HASH_ROUNDS = 12;
 let pool;
 
 function env(name, fallback = '') {
@@ -198,7 +199,7 @@ async function handler(req, res) {
     const passwordCheck = await verifyPassword(password, row.utpasswordhash);
     if (!passwordCheck.valid) return json(res, 401, { ok: false, message: 'Credenciais inválidas.' });
     if (passwordCheck.legacy) {
-      const migratedPassword = await bcrypt.hash(password, 12);
+      const migratedPassword = await bcrypt.hash(password, PASSWORD_HASH_ROUNDS);
       await db.query('UPDATE utilizador SET utpasswordhash=? WHERE idutilizador=?', [migratedPassword, row.idutilizador]);
     }
     if (!isActive(row.utestado)) return json(res, 403, { ok: false, message: 'Conta inativa. Contacta o administrador para reativação.' });
@@ -219,7 +220,7 @@ async function handler(req, res) {
       const [types] = await connection.query('SELECT idtipoutilizador FROM tipoutilizador WHERE tutipo=? LIMIT 1', [type]);
       let typeId = types[0]?.idtipoutilizador;
       if (!typeId) { const [insertType] = await connection.query('INSERT INTO tipoutilizador (tutipo) VALUES (?)', [type]); typeId = insertType.insertId; }
-      const [insert] = await connection.query('INSERT INTO utilizador (utnome,utemail,utpasswordhash,utinicio,uttipo,utestado) VALUES (?,?,?,CURDATE(),?,"ativo")', [name, email, await bcrypt.hash(password, 10), typeId]);
+      const [insert] = await connection.query('INSERT INTO utilizador (utnome,utemail,utpasswordhash,utinicio,uttipo,utestado) VALUES (?,?,?,CURDATE(),?,"ativo")', [name, email, await bcrypt.hash(password, PASSWORD_HASH_ROUNDS), typeId]);
       if (type === 'organizador') await connection.query('INSERT INTO organizador (orgnome,orgemail,orginicio,orgestado,orgidutilizador) VALUES (?,?,CURDATE(),"pendente",?)', [name, email, insert.insertId]);
       await connection.commit();
       if (type === 'organizador') return json(res, 201, { ok: true, pending: true, message: 'Conta de organizador criada e pendente de aprovação.' });

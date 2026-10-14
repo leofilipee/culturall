@@ -10,6 +10,7 @@ INSERT IGNORE INTO tipoutilizador (idtipoutilizador, tutipo) VALUES
 (4, 'administrador');
 
 -- 2. Inserir Utilizadores
+-- Todas as palavras-passe são hashes bcrypt (custo 12), iguais às contas criadas pela API.
 INSERT IGNORE INTO utilizador (utnome, utemail, utpasswordhash, utinicio, uttipo, utestado) VALUES
 ('Maria Silva', 'maria@example.com', '$2y$12$QfU4kGiGAspHsteZoRWGz.n24MJsx4/4GytkytV8CHHw2fjS52RgO', '2025-01-15', 2, 'ativo'),
 ('João Almeida', 'joao@example.com', '$2y$12$99Svclmc56dO240khow/CO3tIskXqmUMZQ6esAeiop02HgvC97g.C', '2024-11-05', 3, 'ativo'),
