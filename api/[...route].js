@@ -10,6 +10,24 @@ function env(name, fallback = '') {
   return value === undefined || value === '' ? fallback : value;
 }
 
+function mysqlSslConfig() {
+  if (env('MYSQL_SSL', 'true') !== 'true') {
+    return undefined;
+  }
+
+  const configuredCa = env('MYSQL_SSL_CA');
+  const ca = configuredCa
+    ? (configuredCa.startsWith('base64:')
+      ? Buffer.from(configuredCa.slice('base64:'.length), 'base64').toString('utf8')
+      : configuredCa.replace(/\\n/g, '\n'))
+    : undefined;
+
+  return {
+    rejectUnauthorized: true,
+    ...(ca ? { ca } : {})
+  };
+}
+
 function getPool() {
   if (!pool) {
     const host = env('MYSQL_HOST', env('MYSQLHOST', env('DB_HOST')));
@@ -27,7 +45,7 @@ function getPool() {
       password,
       waitForConnections: true,
       connectionLimit: 3,
-      ssl: env('MYSQL_SSL', 'true') === 'true' ? { rejectUnauthorized: true } : undefined
+      ssl: mysqlSslConfig()
     });
   }
   return pool;
@@ -289,7 +307,37 @@ async function handler(req, res) {
   }
   if (route === 'admin/users') {
     const actor = requireUser(req, res, ['admin']); if (!actor) return;
-    if (req.method === 'GET') { const [rows] = await db.query('SELECT u.*,t.tutipo,(SELECT COUNT(*) FROM favorito f WHERE f.favidutilizador=u.idutilizador) totalFavoritos FROM utilizador u JOIN tipoutilizador t ON t.idtipoutilizador=u.uttipo ORDER BY u.idutilizador DESC'); return json(res, 200, { ok: true, users: rows.map((r) => ({ id: Number(r.idutilizador), name: r.utnome, email: r.utemail, registeredAt: r.utinicio, status: isActive(r.utestado) ? 'ativo' : 'inativo', estado: isActive(r.utestado), isActive: isActive(r.utestado), type: r.tutipo, roleLabel: roleLabel(r.tutipo), favoriteCount: Number(r.totalFavoritos) })) }); }
+    if (req.method === 'GET') {
+      const [rows] = await db.query(`
+        SELECT
+          u.idutilizador,
+          u.utnome,
+          u.utemail,
+          u.utinicio,
+          u.utestado,
+          COALESCE(t.tutipo, 'registado') AS tutipo,
+          (SELECT COUNT(*) FROM favorito f WHERE f.favidutilizador = u.idutilizador) AS totalFavoritos
+        FROM utilizador u
+        LEFT JOIN tipoutilizador t ON t.idtipoutilizador = u.uttipo
+        ORDER BY u.idutilizador DESC
+      `);
+      return json(res, 200, {
+        ok: true,
+        total: rows.length,
+        users: rows.map((r) => ({
+          id: Number(r.idutilizador),
+          name: r.utnome,
+          email: r.utemail,
+          registeredAt: r.utinicio,
+          status: isActive(r.utestado) ? 'ativo' : 'inativo',
+          estado: isActive(r.utestado),
+          isActive: isActive(r.utestado),
+          type: r.tutipo,
+          roleLabel: roleLabel(r.tutipo),
+          favoriteCount: Number(r.totalFavoritos)
+        }))
+      });
+    }
     const active = body.estado ?? body.isActive ?? ['ativo', 'active', '1', 'true'].includes(String(body.status).toLowerCase()); await db.query('UPDATE utilizador SET utestado=? WHERE LOWER(utemail)=LOWER(?)', [active ? 'ativo' : 'inativo', body.email]); return json(res, 200, { ok: true, email: body.email, status: active ? 'ativo' : 'inativo', estado: Boolean(active), isActive: Boolean(active) });
   }
   if (route === 'admin/organizers') {

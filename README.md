@@ -6,7 +6,7 @@ Aplicação web de eventos culturais com frontend em HTML/CSS/JavaScript e API s
 
 1. Importa [bdd/ScriptTabelas.sql](bdd/ScriptTabelas.sql) na tua instância MySQL ou MariaDB.
 2. Importa [bdd/SeedData.sql](bdd/SeedData.sql) para carregar utilizadores, organizadores, eventos e favoritos de teste.
-3. Define `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` e `SESSION_SECRET` (ou os equivalentes `DB_*`) no ambiente local.
+3. Define `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` e `SESSION_SECRET` (ou os equivalentes `DB_*`) no ambiente local. Para TiDB Cloud, usa a porta `4000`, `MYSQL_SSL=true` e, se o certificado CA for exigido pelo endpoint, define também `MYSQL_SSL_CA` com o conteúdo PEM do certificado. O valor pode usar `\n` para quebras de linha ou o formato `base64:<certificado>`.
 4. Instala as dependências com `npm install` e arranca o servidor local com `npx vercel dev` (ou usa um servidor PHP apenas para visualizar o frontend).
 5. Abre o endereço indicado pelo Vercel CLI, normalmente `http://localhost:3000/login.html`. Não uses o Live Preview do VS Code para testar login ou registo, porque ele não executa as funções serverless.
 
@@ -16,7 +16,7 @@ O projeto está preparado para ser importado diretamente na Vercel:
 
 1. Cria uma base de dados MySQL externa compatível com a Vercel.
 2. Importa [bdd/ScriptTabelas.sql](bdd/ScriptTabelas.sql) e [bdd/SeedData.sql](bdd/SeedData.sql) nessa base de dados.
-3. Importa o repositório na Vercel e configura `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_SSL=true` e `SESSION_SECRET`.
+3. Importa o repositório na Vercel e configura `MYSQL_HOST`, `MYSQL_PORT=4000`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_SSL=true`, `MYSQL_SSL_CA` (CA do TiDB Cloud, quando exigido) e `SESSION_SECRET`.
 4. Faz o deploy. Os ficheiros HTML, CSS e JavaScript são servidos como conteúdo estático e [api/[...route].js](api/[...route].js) trata os endpoints serverless.
 
 `SESSION_SECRET` deve ser uma string aleatória longa. A Vercel não fornece uma base de dados nem armazenamento de sessões PHP, por isso a API usa cookies assinados e uma ligação MySQL externa.

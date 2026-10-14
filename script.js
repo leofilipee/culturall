@@ -1965,8 +1965,19 @@ document.addEventListener('DOMContentLoaded', () => {
             adminUsers = response.users.map(mapAdminUser);
             renderAdminUsersTable();
           }
-        } catch {
-          // Mantém os dados de fallback se a API não responder.
+        } catch (error) {
+          const tableBody = profileRoot.querySelector('[data-admin-pane="users"] tbody');
+          if (tableBody) {
+            tableBody.innerHTML = `
+              <tr>
+                <td colspan="6" class="admin-table-empty">
+                  ${error instanceof Error && error.message
+                    ? error.message
+                    : 'Não foi possível carregar os utilizadores.'}
+                </td>
+              </tr>
+            `;
+          }
         }
       };
 
@@ -1983,8 +1994,19 @@ document.addEventListener('DOMContentLoaded', () => {
             }));
             renderAdminOrganizersTable();
           }
-        } catch {
-          // Mantém os dados de fallback se a API não responder.
+        } catch (error) {
+          const tableBody = profileRoot.querySelector('[data-admin-pane="organizers"] tbody');
+          if (tableBody) {
+            tableBody.innerHTML = `
+              <tr>
+                <td colspan="5" class="admin-table-empty">
+                  ${error instanceof Error && error.message
+                    ? error.message
+                    : 'Não foi possível carregar os organizadores.'}
+                </td>
+              </tr>
+            `;
+          }
         }
       };
 
