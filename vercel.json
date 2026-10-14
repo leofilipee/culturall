@@ -3,5 +3,11 @@
     "api/[...route].js": {
       "maxDuration": 15
     }
-  }
+  },
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api/[...route].js"
+    }
+  ]
 }
