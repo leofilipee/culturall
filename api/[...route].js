@@ -114,6 +114,21 @@ function formatPrice(value) {
   return { price, priceLabel: price === 0 ? 'Entrada Gratuita' : `€${new Intl.NumberFormat('pt-PT', { maximumFractionDigits: 0 }).format(price)}`, priceType: price === 0 ? 'Gratuito' : 'Pago' };
 }
 
+async function verifyPassword(password, storedPassword) {
+  const stored = String(storedPassword || '');
+  if (!stored) return { valid: false, legacy: false };
+
+  if (/^\$2[aby]\$\d{2}\$/.test(stored)) {
+    return { valid: await bcrypt.compare(password, stored), legacy: false };
+  }
+
+  // Seed data from older installations stored passwords as plain text.
+  // Accept it once so existing accounts can be migrated without a database reset.
+  const valid = password.length === stored.length
+    && crypto.timingSafeEqual(Buffer.from(password), Buffer.from(stored));
+  return { valid, legacy: valid };
+}
+
 async function eventRows(connection, status, ownEmail) {
   const params = [];
   const conditions = [];
@@ -178,7 +193,14 @@ async function handler(req, res) {
     const email = String(body.email || '').trim().toLowerCase();
     const [rows] = await db.query(`SELECT u.*, t.tutipo, o.orgestado FROM utilizador u JOIN tipoutilizador t ON t.idtipoutilizador=u.uttipo LEFT JOIN organizador o ON o.orgidutilizador=u.idutilizador WHERE LOWER(u.utemail)=? LIMIT 1`, [email]);
     const row = rows[0];
-    if (!row || !(await bcrypt.compare(String(body.password || ''), row.utpasswordhash).catch(() => row.utpasswordhash === body.password))) return json(res, 401, { ok: false, message: 'Credenciais inválidas.' });
+    if (!row) return json(res, 401, { ok: false, message: 'Credenciais inválidas.' });
+    const password = String(body.password || '');
+    const passwordCheck = await verifyPassword(password, row.utpasswordhash);
+    if (!passwordCheck.valid) return json(res, 401, { ok: false, message: 'Credenciais inválidas.' });
+    if (passwordCheck.legacy) {
+      const migratedPassword = await bcrypt.hash(password, 12);
+      await db.query('UPDATE utilizador SET utpasswordhash=? WHERE idutilizador=?', [migratedPassword, row.idutilizador]);
+    }
     if (!isActive(row.utestado)) return json(res, 403, { ok: false, message: 'Conta inativa. Contacta o administrador para reativação.' });
     if (row.tutipo === 'organizador' && row.orgestado !== 'aprovado') return json(res, 403, { ok: false, message: row.orgestado === 'pendente' ? 'Conta de organizador pendente de aprovação.' : 'Conta de organizador inativa ou suspensa.' });
     const user = { id: Number(row.idutilizador), email: row.utemail, name: row.utnome, roleLabel: roleLabel(row.tutipo), accountType: accountType(row.tutipo), location: row.utlocalizacao || '' };

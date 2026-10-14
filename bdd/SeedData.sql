@@ -11,15 +11,15 @@ INSERT IGNORE INTO tipoutilizador (idtipoutilizador, tutipo) VALUES
 
 -- 2. Inserir Utilizadores
 INSERT IGNORE INTO utilizador (utnome, utemail, utpasswordhash, utinicio, uttipo, utestado) VALUES
-('Maria Silva', 'maria@example.com', 'user123', '2025-01-15', 2, 'ativo'),
-('João Almeida', 'joao@example.com', 'org123', '2024-11-05', 3, 'ativo'),
-('Admin Cultur\'All', 'admin@culturall.pt', 'admin123', '2024-10-01', 4, 'ativo'),
-('Ana Costa', 'ana@example.com', 'user123', '2025-02-20', 2, 'ativo'),
-('Pedro Oliveira', 'pedro@example.com', 'user123', '2025-01-10', 2, 'inativo'),
-('Sofia Ferreira', 'sofia@example.com', 'org123', '2026-03-01', 3, 'ativo'),
-('Carlos Mendes', 'carlos@example.com', 'org123', '2025-01-20', 3, 'ativo'),
-('Rita Alves', 'rita@example.com', 'org123', '2024-12-10', 3, 'inativo'),
-('Admin Cultural', 'admin@cultural.pt', 'admin123', '2026-05-14', 4, 'ativo');
+('Maria Silva', 'maria@example.com', '$2y$12$QfU4kGiGAspHsteZoRWGz.n24MJsx4/4GytkytV8CHHw2fjS52RgO', '2025-01-15', 2, 'ativo'),
+('João Almeida', 'joao@example.com', '$2y$12$99Svclmc56dO240khow/CO3tIskXqmUMZQ6esAeiop02HgvC97g.C', '2024-11-05', 3, 'ativo'),
+('Admin Cultur\'All', 'admin@culturall.pt', '$2y$12$9RNN8i.ELMwgwCpxRwSKHes9lSvjFhl05BccHwH0ikPJ82lTxv40u', '2024-10-01', 4, 'ativo'),
+('Ana Costa', 'ana@example.com', '$2y$12$QfU4kGiGAspHsteZoRWGz.n24MJsx4/4GytkytV8CHHw2fjS52RgO', '2025-02-20', 2, 'ativo'),
+('Pedro Oliveira', 'pedro@example.com', '$2y$12$QfU4kGiGAspHsteZoRWGz.n24MJsx4/4GytkytV8CHHw2fjS52RgO', '2025-01-10', 2, 'inativo'),
+('Sofia Ferreira', 'sofia@example.com', '$2y$12$99Svclmc56dO240khow/CO3tIskXqmUMZQ6esAeiop02HgvC97g.C', '2026-03-01', 3, 'ativo'),
+('Carlos Mendes', 'carlos@example.com', '$2y$12$99Svclmc56dO240khow/CO3tIskXqmUMZQ6esAeiop02HgvC97g.C', '2025-01-20', 3, 'ativo'),
+('Rita Alves', 'rita@example.com', '$2y$12$99Svclmc56dO240khow/CO3tIskXqmUMZQ6esAeiop02HgvC97g.C', '2024-12-10', 3, 'inativo'),
+('Admin Cultural', 'admin@cultural.pt', '$2y$12$9RNN8i.ELMwgwCpxRwSKHes9lSvjFhl05BccHwH0ikPJ82lTxv40u', '2026-05-14', 4, 'ativo');
 
 -- 3. Inserir Administradores (Relacionando com a tabela utilizador)
 INSERT IGNORE INTO administrador (adidutilizador)
