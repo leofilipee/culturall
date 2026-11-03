@@ -7,7 +7,7 @@
  * Usa a ponte window.CulturAll publicada pelo script.js.
  */
 document.addEventListener('DOMContentLoaded', () => {
-  const pageType = document.body.dataset.page ?? 'home';
+  const pageType = document.body.dataset.page ?? (document.body.classList.contains('profile-page') ? 'profile' : 'home');
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   // Cores por categoria (ordem categórica fixa, validada para daltonismo).
@@ -147,6 +147,12 @@ document.addEventListener('DOMContentLoaded', () => {
   if (pageType === 'stats') {
     whenBridgeReady(initStats);
   }
+
+  // O Observatório vive agora no Dashboard do perfil (administrador e organizador).
+  window.CulturAllObservatory = {
+    mount: (root) => whenBridgeReady((bridge) => initStats(bridge, root))
+  };
+  document.dispatchEvent(new CustomEvent('culturall:enhancements-ready'));
 
   /* =========================================================
    * Página inicial
@@ -354,9 +360,9 @@ document.addEventListener('DOMContentLoaded', () => {
                   Ver evento
                   <svg viewBox="0 0 24 24"><path d="M5 12h14"></path><path d="m13 6 6 6-6 6"></path></svg>
                 </a>
-                <button class="featured-fav favorite-btn${isFav ? ' active' : ''}" type="button" data-featured-fav="${event.id}" aria-pressed="${isFav}" aria-label="${isFav ? 'Remover dos Favoritos' : 'Adicionar aos Favoritos'}">
+                ${bridge.canFavorite() ? `<button class="featured-fav favorite-btn${isFav ? ' active' : ''}" type="button" data-featured-fav="${event.id}" aria-pressed="${isFav}" aria-label="${isFav ? 'Remover dos Favoritos' : 'Adicionar aos Favoritos'}">
                   <svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.4-7 10-7 10Z"></path></svg>
-                </button>
+                </button>` : ''}
               </div>
             </div>
           </article>`;
@@ -482,7 +488,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (!map) {
-        map = window.L.map(mapElement, { scrollWheelZoom: false, zoomControl: true }).setView([39.6, -8.1], 7);
+        map = window.L.map(mapElement, { scrollWheelZoom: true, zoomControl: true }).setView([39.6, -8.1], 7);
         window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
           maxZoom: 18,
           attribution: '&copy; contribuidores do <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -494,7 +500,8 @@ document.addEventListener('DOMContentLoaded', () => {
       markersLayer.clearLayers();
 
       const bridge = window.CulturAll;
-      const events = [...lastRendered.events, ...lastRendered.archived];
+      // Só eventos que ainda vão acontecer (ou estão a decorrer) aparecem no mapa.
+      const events = lastRendered.events.filter((event) => !bridge.isPastEvent(event));
       const bounds = [];
       const categoriesShown = new Set();
 
@@ -504,14 +511,13 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
 
-        const isPast = bridge.isPastEvent(event);
         const color = getCategoryColor(event.category);
         categoriesShown.add(event.category);
         bounds.push(coordinates);
 
         const icon = window.L.divIcon({
           className: '',
-          html: `<span class="map-pin${isPast ? ' past' : ''}" style="--pin:${color}"><b>${categoryIcons[event.category] ?? '•'}</b></span>`,
+          html: `<span class="map-pin" style="--pin:${color}"><b>${categoryIcons[event.category] ?? '•'}</b></span>`,
           iconSize: [36, 36],
           iconAnchor: [18, 34],
           popupAnchor: [0, -30]
@@ -522,7 +528,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <a class="map-popup" href="${bridge.getEventDetailUrl(event.id)}">
               <img src="${event.image}" alt="" />
               <span class="map-popup-body">
-                <small style="--pin:${color}">${escapeHtml(event.category)}${isPast ? ' · terminado' : ''}</small>
+                <small style="--pin:${color}">${escapeHtml(event.category)}</small>
                 <strong>${escapeHtml(event.title)}</strong>
                 <span>${formatRange(event)} · ${escapeHtml(event.city || event.location)}</span>
                 <em>${event.priceType === 'Gratuito' ? 'Gratuito' : escapeHtml(event.priceLabel)}</em>
@@ -538,7 +544,6 @@ document.addEventListener('DOMContentLoaded', () => {
       if (legend) {
         legend.innerHTML = categoriesShown.size > 0
           ? [...categoriesShown].map((category) => `<span><i style="--pin:${getCategoryColor(category)}"></i>${escapeHtml(category)}</span>`).join('')
-            + '<span class="legend-past"><i></i>Já aconteceu</span>'
           : '<span>Nenhum evento para mostrar no mapa com estes filtros.</span>';
       }
     };
@@ -688,7 +693,7 @@ document.addEventListener('DOMContentLoaded', () => {
   /* =========================================================
    * Observatório (stats.html)
    * ========================================================= */
-  function initStats(bridge) {
+  function initStats(bridge, root = document) {
     const events = bridge.getEvents();
     const upcoming = events.filter((event) => !bridge.isPastEvent(event));
     const free = events.filter((event) => event.priceType === 'Gratuito');
@@ -696,7 +701,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const totalViews = events.reduce((sum, event) => sum + (event.views || 0), 0);
 
     const setText = (id, value) => {
-      const element = document.getElementById(id);
+      const element = root.querySelector(`#${id}`);
       if (element) {
         element.textContent = value;
       }
@@ -731,7 +736,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Tabelas acessíveis (alternativa aos gráficos).
     const fillTable = (id, rows) => {
-      const table = document.getElementById(id);
+      const table = root.querySelector(`#${id}`);
       if (table) {
         table.querySelector('tbody').innerHTML = rows.map(([label, value]) => `<tr><td>${escapeHtml(label)}</td><td>${value}</td></tr>`).join('');
       }
@@ -742,7 +747,12 @@ document.addEventListener('DOMContentLoaded', () => {
     fillTable('tableMonth', monthLabels.map((label, index) => [label, byMonth[index]]));
     fillTable('tableViews', topViewed.map((event) => [event.title, event.views.toLocaleString('pt-PT')]));
 
-    document.querySelectorAll('[data-toggle-table]').forEach((button) => {
+    root.querySelectorAll('[data-toggle-table]').forEach((button) => {
+      if (button.dataset.bound === 'true') {
+        return;
+      }
+
+      button.dataset.bound = 'true';
       button.addEventListener('click', () => {
         const card = button.closest('.stats-card');
         const showTable = !card.classList.contains('show-table');
@@ -753,7 +763,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     if (typeof window.Chart === 'undefined') {
-      document.querySelectorAll('.stats-card').forEach((card) => card.classList.add('show-table'));
+      root.querySelectorAll('.stats-card').forEach((card) => card.classList.add('show-table'));
       return;
     }
 
@@ -799,8 +809,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     const makeChart = (id, config) => {
-      const canvas = document.getElementById(id);
+      const canvas = root.querySelector(`#${id}`);
       if (canvas) {
+        window.Chart.getChart(canvas)?.destroy();
         new window.Chart(canvas, config);
       }
     };

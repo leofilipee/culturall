@@ -124,6 +124,41 @@ function isActive(value) {
   return ['1', 1, true, 'true', 'ativo', 'active'].includes(value) || value == null;
 }
 
+// Visibilidade escolhida pelo organizador: publicar já, agendar (oculto até evpublicaem) ou ocultar.
+// A coluna evpublicaem (UTC) é criada automaticamente na primeira utilização, se ainda não existir.
+let publishColumnReady = null;
+async function ensurePublishColumn(connection) {
+  if (publishColumnReady !== null) return publishColumnReady;
+  try {
+    const [cols] = await connection.query("SELECT COUNT(*) AS total FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'evento' AND column_name = 'evpublicaem'");
+    if (!Number(cols[0]?.total)) await connection.query('ALTER TABLE evento ADD COLUMN evpublicaem DATETIME NULL');
+    publishColumnReady = true;
+  } catch (error) {
+    console.error('Coluna evpublicaem indisponível (agendamento desativado):', error.message);
+    publishColumnReady = false;
+  }
+  return publishColumnReady;
+}
+
+async function releaseScheduledEvents(connection) {
+  if (!(await ensurePublishColumn(connection))) return;
+  await connection.query("UPDATE evento SET evestado='publicado', evpublicaem=NULL WHERE evestado='oculto' AND evpublicaem IS NOT NULL AND evpublicaem <= UTC_TIMESTAMP()");
+}
+
+// Devolve { estado, publicaem } a partir de body.visibility ('publish' | 'schedule' | 'hide'), ou { error }.
+function resolveVisibility(body) {
+  const visibility = String(body.visibility || '').toLowerCase();
+  if (visibility === 'publish') return { estado: 'publicado', publicaem: null };
+  if (visibility === 'hide') return { estado: 'oculto', publicaem: null };
+  if (visibility === 'schedule') {
+    const when = new Date(body.publishAt);
+    if (Number.isNaN(when.getTime())) return { error: 'Escolhe a data e hora de publicação.' };
+    if (when.getTime() <= Date.now() + 30000) return { error: 'A data de publicação tem de estar no futuro.' };
+    return { estado: 'oculto', publicaem: when.toISOString().slice(0, 19).replace('T', ' ') };
+  }
+  return { estado: 'pendente', publicaem: null };
+}
+
 function statusLabel(status) {
   return ({ publicado: 'Publicado', ativo: 'Publicado', pendente: 'Pendente', oculto: 'Oculto', recusado: 'Recusado', inativo: 'Inativo' })[status] || 'Publicado';
 }
@@ -148,7 +183,40 @@ async function verifyPassword(password, storedPassword) {
   return { valid, legacy: valid };
 }
 
+// Guarda as imagens de um evento (a primeira é a capa/miniatura, as restantes são galeria).
+async function saveEventImages(connection, eventId, images) {
+  let saved = 0;
+  for (const image of images) {
+    if (!/^(data:image\/|https?:\/\/|\/)/i.test(String(image))) continue;
+    await connection.query('INSERT INTO imagem (imgurl,imgtipo,imgidevento) VALUES (?,?,?)', [image, saved === 0 ? 'capa' : 'galeria', eventId]);
+    saved += 1;
+  }
+  return saved;
+}
+
+// Elimina uma conta de utilizador da base de dados. Se for organizador, apaga primeiro os seus eventos
+// (a chave estrangeira evento -> organizador é RESTRICT); o resto (favoritos, perfil de organizador,
+// preferências, notificações) cai em cascata e as visualizações ficam anónimas.
+async function deleteUserAccount(db, userId) {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [organizers] = await connection.query('SELECT idorganizador FROM organizador WHERE orgidutilizador=?', [userId]);
+    for (const organizer of organizers) {
+      await connection.query('DELETE FROM evento WHERE evidorganizador=?', [organizer.idorganizador]);
+    }
+    await connection.query('DELETE FROM utilizador WHERE idutilizador=?', [userId]);
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
 async function eventRows(connection, status, ownEmail) {
+  await releaseScheduledEvents(connection);
   const params = [];
   const conditions = [];
   if (status && status !== 'all') {
@@ -178,7 +246,9 @@ async function eventRows(connection, status, ownEmail) {
     location: [row.locmorada, row.loccidade].filter(Boolean).join(', '),
     city: row.loccidade, district: row.locdistrito, category: row.catnome, ...formatPrice(row.evvalor),
     views: Number(row.totalVisualizacoes || 0), ticketUrl: row.evlinkbilhete || '', status: row.evestado,
-    statusLabel: statusLabel(row.evestado), isRecurring: Boolean(row.evrecorrente), recurringPattern: row.evperiodicidade || '',
+    statusLabel: row.evestado === 'oculto' && row.evpublicaem ? 'Agendado' : statusLabel(row.evestado),
+    scheduledFor: row.evestado === 'oculto' && row.evpublicaem ? new Date(`${String(row.evpublicaem instanceof Date ? row.evpublicaem.toISOString() : row.evpublicaem).replace(' ', 'T').replace(/Z$/, '')}Z`).toISOString() : '',
+    isRecurring: Boolean(row.evrecorrente), recurringPattern: row.evperiodicidade || '',
     recurringDays: row.evdiasrecorrencia || '', submittedAt: row.evdatasubmissao || '', approvedAt: row.evdataaprovacao || '',
     rejectReason: row.evmotivorecusa || '', organizer: row.orgnome, organizerEmail: row.orgemail, image: row.imagem_capa || ''
   }));
@@ -266,13 +336,12 @@ async function handler(req, res) {
       if (!locationId) { const [r] = await db.query('INSERT INTO localizacao (locmorada,loccidade,locdistrito) VALUES (?,?,?)', [body.locationStreet || null, body.locationCity, body.locationDistrict]); locationId = r.insertId; }
       const [orgs] = await db.query('SELECT idorganizador FROM organizador WHERE orgidutilizador=? LIMIT 1', [actor.id]);
       if (!orgs[0]) return json(res, 422, { ok: false, message: 'O utilizador autenticado não tem perfil de organizador.' });
-      const [result] = await db.query('INSERT INTO evento (evtitulo,evdescricao,evdatainicio,evdatafim,evvalor,evlinkbilhete,evestado,evrecorrente,evperiodicidade,evdiasrecorrencia,evidcategoria,evidlocalizacao,evidorganizador) VALUES (?,?,?,?,?,?, "pendente",?,?,?,?,?,?)', [body.title, body.description || null, body.startDate, body.endDate || null, Number(body.price || 0), body.ticketUrl || null, body.isRecurring ? 1 : 0, body.recurringPattern || null, body.recurringDays || null, categoryId, locationId, orgs[0].idorganizador]);
+      const visibility = resolveVisibility(body);
+      if (visibility.error) return json(res, 422, { ok: false, message: visibility.error });
+      const [result] = await db.query('INSERT INTO evento (evtitulo,evdescricao,evdatainicio,evdatafim,evvalor,evlinkbilhete,evestado,evrecorrente,evperiodicidade,evdiasrecorrencia,evidcategoria,evidlocalizacao,evidorganizador) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [body.title, body.description || null, body.startDate, body.endDate || null, Number(body.price || 0), body.ticketUrl || null, visibility.estado, body.isRecurring ? 1 : 0, body.recurringPattern || null, body.recurringDays || null, categoryId, locationId, orgs[0].idorganizador]);
+      if (visibility.publicaem && (await ensurePublishColumn(db))) await db.query('UPDATE evento SET evpublicaem=? WHERE idevento=?', [visibility.publicaem, result.insertId]);
       if (Array.isArray(body.images)) {
-        for (const [index, image] of body.images.entries()) {
-          if (/^(data:image\/|https?:\/\/|\/)/i.test(String(image))) {
-            await db.query('INSERT INTO imagem (imgurl,imgtipo,imgidevento) VALUES (?,?,?)', [image, index === 0 ? 'capa' : 'galeria', result.insertId]);
-          }
-        }
+        await saveEventImages(db, result.insertId, body.images);
       }
       return json(res, 201, { ok: true, message: 'Evento criado com sucesso.', eventId: result.insertId });
     }
@@ -284,16 +353,44 @@ async function handler(req, res) {
       if (actor.accountType !== 'admin' && actor.email.toLowerCase() !== rows[0].orgemail.toLowerCase()) return json(res, 403, { ok: false, message: 'Sem permissão.' });
       if (action === 'delete') await db.query('DELETE FROM evento WHERE idevento=?', [eventId]);
       else if (action === 'update') {
-        await db.query('UPDATE evento SET evtitulo=?,evdescricao=?,evdatainicio=?,evdatafim=?,evvalor=?,evlinkbilhete=?,evestado="pendente",evrecorrente=?,evperiodicidade=?,evdiasrecorrencia=? WHERE idevento=?', [
+        const visibility = resolveVisibility(body);
+        if (visibility.error) return json(res, 422, { ok: false, message: visibility.error });
+        await db.query('UPDATE evento SET evtitulo=?,evdescricao=?,evdatainicio=?,evdatafim=?,evvalor=?,evlinkbilhete=?,evestado=?,evrecorrente=?,evperiodicidade=?,evdiasrecorrencia=? WHERE idevento=?', [
           body.title, body.description || null, body.startDate, body.endDate || null, Number(body.price || 0), body.ticketUrl || null,
-          body.isRecurring ? 1 : 0, body.recurringPattern || null, body.recurringDays || null, eventId
+          visibility.estado, body.isRecurring ? 1 : 0, body.recurringPattern || null, body.recurringDays || null, eventId
         ]);
-      } else await db.query('UPDATE evento SET evestado=? WHERE idevento=?', [action === 'inactivate' ? 'inativo' : action === 'hide' ? 'oculto' : action === 'show' ? 'publicado' : 'pendente', eventId]);
+        if (await ensurePublishColumn(db)) await db.query('UPDATE evento SET evpublicaem=? WHERE idevento=?', [visibility.publicaem, eventId]);
+        // Só substitui as imagens se o organizador enviou novas; caso contrário mantêm-se as atuais.
+        if (Array.isArray(body.images) && body.images.some((image) => /^(data:image\/|https?:\/\/|\/)/i.test(String(image)))) {
+          await db.query('DELETE FROM imagem WHERE imgidevento=?', [eventId]);
+          await saveEventImages(db, eventId, body.images);
+        }
+      } else {
+        await db.query('UPDATE evento SET evestado=? WHERE idevento=?', [action === 'inactivate' ? 'inativo' : action === 'hide' ? 'oculto' : action === 'show' ? 'publicado' : 'pendente', eventId]);
+        if (await ensurePublishColumn(db)) await db.query('UPDATE evento SET evpublicaem=NULL WHERE idevento=?', [eventId]);
+      }
       return json(res, 200, { ok: true });
     }
   }
+  if (route === 'event-images' && req.method === 'GET') {
+    const eventId = Number(req.query?.eventId || new URL(req.url, 'http://localhost').searchParams.get('eventId'));
+    if (!eventId) return json(res, 422, { ok: false, message: 'Evento inválido.' });
+    const user = currentUser(req);
+    await releaseScheduledEvents(db);
+    const [events] = await db.query('SELECT e.evestado, o.orgemail FROM evento e JOIN organizador o ON o.idorganizador=e.evidorganizador WHERE e.idevento=?', [eventId]);
+    if (!events[0]) return json(res, 404, { ok: false, message: 'Evento não encontrado.' });
+    const isPublic = ['publicado', 'ativo'].includes(events[0].evestado);
+    const isOwner = user && (user.accountType === 'admin' || String(user.email || '').toLowerCase() === String(events[0].orgemail || '').toLowerCase());
+    if (!isPublic && !isOwner) return json(res, 403, { ok: false, message: 'Sem permissão.' });
+    const [rows] = await db.query("SELECT imgurl FROM imagem WHERE imgidevento=? ORDER BY (imgtipo='capa') DESC, idimagem ASC", [eventId]);
+    return json(res, 200, { ok: true, images: rows.map((row) => row.imgurl) });
+  }
   if (route === 'favorites') {
     const user = requireUser(req, res); if (!user) return;
+    if (user.accountType !== 'lambda') {
+      if (req.method === 'GET') return json(res, 200, { ok: true, favorites: [] });
+      return json(res, 403, { ok: false, message: 'Este tipo de conta não tem eventos favoritos.' });
+    }
     if (req.method === 'GET') { const [rows] = await db.query('SELECT favidevento FROM favorito WHERE favidutilizador=? ORDER BY idfavorito DESC', [user.id]); return json(res, 200, { ok: true, favorites: rows.map((row) => Number(row.favidevento)) }); }
     const eventId = Number(body.eventId); if (!eventId) return json(res, 422, { ok: false, message: 'Evento inválido.' });
     if (req.method === 'DELETE') { await db.query('DELETE FROM favorito WHERE favidutilizador=? AND favidevento=?', [user.id, eventId]); return json(res, 200, { ok: true }); }
@@ -338,11 +435,30 @@ async function handler(req, res) {
         }))
       });
     }
+    if (req.method === 'DELETE') {
+      const email = String(body.email || '').trim().toLowerCase();
+      if (!email) return json(res, 422, { ok: false, message: 'Email em falta.' });
+      const [users] = await db.query('SELECT u.idutilizador, t.tutipo FROM utilizador u LEFT JOIN tipoutilizador t ON t.idtipoutilizador=u.uttipo WHERE LOWER(u.utemail)=? LIMIT 1', [email]);
+      if (!users[0]) return json(res, 404, { ok: false, message: 'Utilizador não encontrado.' });
+      if (Number(users[0].idutilizador) === Number(actor.id)) return json(res, 403, { ok: false, message: 'Não podes eliminar a tua própria conta.' });
+      if (users[0].tutipo === 'administrador') return json(res, 403, { ok: false, message: 'Não é possível eliminar contas de administrador.' });
+      await deleteUserAccount(db, users[0].idutilizador);
+      return json(res, 200, { ok: true, email });
+    }
     const active = body.estado ?? body.isActive ?? ['ativo', 'active', '1', 'true'].includes(String(body.status).toLowerCase()); await db.query('UPDATE utilizador SET utestado=? WHERE LOWER(utemail)=LOWER(?)', [active ? 'ativo' : 'inativo', body.email]); return json(res, 200, { ok: true, email: body.email, status: active ? 'ativo' : 'inativo', estado: Boolean(active), isActive: Boolean(active) });
   }
   if (route === 'admin/organizers') {
     const actor = requireUser(req, res, ['admin']); if (!actor) return;
     if (req.method === 'GET') { const [rows] = await db.query('SELECT o.*,COUNT(e.idevento) totalEventos FROM organizador o LEFT JOIN evento e ON e.evidorganizador=o.idorganizador GROUP BY o.idorganizador ORDER BY FIELD(o.orgestado,"pendente","aprovado","suspenso"),o.idorganizador DESC'); return json(res, 200, { ok: true, organizers: rows.map((r) => ({ id: Number(r.idorganizador), name: r.orgnome, email: r.orgemail, registeredAt: r.orginicio, status: r.orgestado, eventCount: Number(r.totalEventos) })) }); }
+    if (req.method === 'DELETE') {
+      const email = String(body.email || '').trim().toLowerCase();
+      if (!email) return json(res, 422, { ok: false, message: 'Email em falta.' });
+      const [organizers] = await db.query('SELECT orgidutilizador FROM organizador WHERE LOWER(orgemail)=? LIMIT 1', [email]);
+      if (!organizers[0]) return json(res, 404, { ok: false, message: 'Organizador não encontrado.' });
+      if (Number(organizers[0].orgidutilizador) === Number(actor.id)) return json(res, 403, { ok: false, message: 'Não podes eliminar a tua própria conta.' });
+      await deleteUserAccount(db, organizers[0].orgidutilizador);
+      return json(res, 200, { ok: true, email });
+    }
     await db.query('UPDATE organizador SET orgestado=? WHERE LOWER(orgemail)=LOWER(?)', [body.status, body.email]); return json(res, 200, { ok: true });
   }
   if (route === 'admin/events') {
@@ -350,7 +466,10 @@ async function handler(req, res) {
     if (req.method === 'GET') return json(res, 200, { ok: true, events: await eventRows(db, req.query.status || 'all', null) });
     const action = String(body.action || '').toLowerCase(), eventId = Number(body.eventId);
     if (action === 'delete') await db.query('DELETE FROM evento WHERE idevento=?', [eventId]);
-    else await db.query('UPDATE evento SET evestado=?,evmotivorecusa=? WHERE idevento=?', [action === 'approve' || action === 'show' ? 'publicado' : action === 'hide' ? 'oculto' : 'inativo', body.reason || null, eventId]);
+    else {
+      await db.query('UPDATE evento SET evestado=?,evmotivorecusa=? WHERE idevento=?', [action === 'approve' || action === 'show' ? 'publicado' : action === 'hide' ? 'oculto' : 'inativo', body.reason || null, eventId]);
+      if (await ensurePublishColumn(db)) await db.query('UPDATE evento SET evpublicaem=NULL WHERE idevento=?', [eventId]);
+    }
     return json(res, 200, { ok: true });
   }
   return json(res, 404, { ok: false, message: 'Endpoint não encontrado.' });
