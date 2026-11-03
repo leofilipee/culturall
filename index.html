@@ -8,8 +8,12 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <link rel="stylesheet" href="styles.css" />
+  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script defer src="demo-events.js"></script>
   <script defer src="script.js"></script>
+  <script defer src="enhancements.js"></script>
 </head>
 <body data-page="home">
   <div class="app-shell">
@@ -21,10 +25,15 @@
 
         <div class="search-wrap">
           <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
-          <input id="searchInput" type="search" placeholder="Pesquisar eventos..." aria-label="Pesquisar eventos" />
+          <input id="searchInput" type="search" placeholder="Pesquisar eventos, cidades, categorias..." aria-label="Pesquisar eventos" autocomplete="off" aria-controls="searchSuggestions" />
+          <div class="search-suggestions" id="searchSuggestions" role="listbox" hidden></div>
         </div>
 
         <div class="topbar-actions">
+          <a class="stats-link" href="stats.html" aria-label="Observatório cultural">
+            <svg viewBox="0 0 24 24"><path d="M4 20V10"></path><path d="M10 20V4"></path><path d="M16 20v-7"></path><path d="M22 20H2"></path></svg>
+            <span>Observatório</span>
+          </a>
           <a class="account-chip" id="accountChip" href="profile.html" hidden></a>
           <a class="favorites-btn" href="favorites.html" aria-label="Favoritos">
             <svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.4-7 10-7 10Z"></path></svg>
@@ -39,6 +48,26 @@
 
       <section class="home-view" id="homeView">
         <div class="page">
+          <section class="featured" id="featured" aria-roledescription="carrossel" aria-label="Eventos em destaque">
+            <div class="featured-track" id="featuredTrack">
+              <div class="featured-slide skeleton" aria-hidden="true"></div>
+            </div>
+            <div class="featured-controls" id="featuredControls" hidden>
+              <button class="featured-arrow" type="button" data-featured-prev aria-label="Destaque anterior">
+                <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"></path></svg>
+              </button>
+              <div class="featured-dots" id="featuredDots"></div>
+              <button class="featured-arrow" type="button" data-featured-next aria-label="Destaque seguinte">
+                <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"></path></svg>
+              </button>
+            </div>
+          </section>
+
+          <section class="quick-filters" aria-label="Filtros rápidos">
+            <div class="chip-row" id="categoryChips" role="group" aria-label="Categorias"></div>
+            <div class="chip-row chip-row-small" id="dateChips" role="group" aria-label="Quando"></div>
+          </section>
+
           <div class="hero-panel">
             <div class="filters-shell" id="filtersShell">
               <button class="filters-toggle-btn" id="filtersToggleBtn" type="button" aria-expanded="false" aria-controls="filtersGrid">
@@ -147,6 +176,16 @@
               <p><span id="resultsCount">0</span> <span id="resultsLabel">eventos encontrados</span></p>
             </div>
             <div class="section-head-actions">
+              <div class="view-toggle" role="tablist" aria-label="Modo de visualização">
+                <button type="button" role="tab" class="active" aria-selected="true" data-view="list">
+                  <svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="2"></rect><rect x="13" y="4" width="7" height="7" rx="2"></rect><rect x="4" y="13" width="7" height="7" rx="2"></rect><rect x="13" y="13" width="7" height="7" rx="2"></rect></svg>
+                  Lista
+                </button>
+                <button type="button" role="tab" aria-selected="false" data-view="map">
+                  <svg viewBox="0 0 24 24"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"></path><path d="M9 4v14"></path><path d="M15 6v14"></path></svg>
+                  Mapa
+                </button>
+              </div>
               <label class="sort-field" for="sortFilter">
                 <span>Ordenar por</span>
                 <select id="sortFilter" aria-label="Ordenar eventos">
@@ -158,7 +197,16 @@
             </div>
           </section>
 
-          <section class="cards-grid" id="cardsGrid" aria-live="polite"></section>
+          <div class="events-map-wrap" id="eventsMapWrap" hidden>
+            <div class="events-map" id="eventsMap" aria-label="Mapa de eventos"></div>
+            <div class="map-legend" id="mapLegend"></div>
+          </div>
+
+          <section class="cards-grid" id="cardsGrid" aria-live="polite">
+            <div class="event-card skeleton-card" aria-hidden="true"><div class="sk-media"></div><div class="sk-line w60"></div><div class="sk-line w90"></div><div class="sk-line w40"></div></div>
+            <div class="event-card skeleton-card" aria-hidden="true"><div class="sk-media"></div><div class="sk-line w60"></div><div class="sk-line w90"></div><div class="sk-line w40"></div></div>
+            <div class="event-card skeleton-card" aria-hidden="true"><div class="sk-media"></div><div class="sk-line w60"></div><div class="sk-line w90"></div><div class="sk-line w40"></div></div>
+          </section>
           <div class="empty-state" id="emptyState" hidden>
             Nenhum evento corresponde aos filtros atuais.
           </div>
@@ -175,6 +223,10 @@
     <a href="favorites.html">
       <svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.4-7 10-7 10Z"></path></svg>
       Favoritos
+    </a>
+    <a href="stats.html">
+      <svg viewBox="0 0 24 24"><path d="M4 20V10"></path><path d="M10 20V4"></path><path d="M16 20v-7"></path><path d="M22 20H2"></path></svg>
+      Dados
     </a>
     <a href="profile.html">
       <svg viewBox="0 0 24 24"><path d="M4 20c1.8-4 4.9-6 8-6s6.2 2 8 6"></path><circle cx="12" cy="8" r="4"></circle></svg>

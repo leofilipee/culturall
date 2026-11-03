@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cultur'All | Observatório Cultural</title>
+  <meta name="description" content="Observatório Cultural Cultur'All: distribuição de eventos culturais por distrito, categoria e mês." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script defer src="demo-events.js"></script>
+  <script defer src="script.js"></script>
+  <script defer src="enhancements.js"></script>
+</head>
+<body data-page="stats">
+  <div class="app-shell">
+    <main class="content" id="inicio">
+      <header class="topbar">
+        <a class="topbar-brand" href="index.html" aria-label="Cultur'All início">
+          <span>Cultur'</span><span>All</span>
+        </a>
+
+        <div class="topbar-title">Observatório Cultural</div>
+
+        <div class="topbar-actions">
+          <a class="stats-link active" href="stats.html" aria-label="Observatório cultural" aria-current="page">
+            <svg viewBox="0 0 24 24"><path d="M4 20V10"></path><path d="M10 20V4"></path><path d="M16 20v-7"></path><path d="M22 20H2"></path></svg>
+            <span>Observatório</span>
+          </a>
+          <a class="account-chip" id="accountChip" href="profile.html" hidden></a>
+          <a class="favorites-btn" href="favorites.html" aria-label="Favoritos">
+            <svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.4-7 10-7 10Z"></path></svg>
+          </a>
+          <a class="login-btn" id="loginToggleBtn" href="login.html">
+            <svg viewBox="0 0 24 24"><path d="M10 17l5-5-5-5"></path><path d="M15 12H4"></path><path d="M20 4v16"></path></svg>
+            Entrar
+          </a>
+        </div>
+      </header>
+
+      <div class="page stats-page">
+        <section class="stats-intro">
+          <a class="event-detail-back-link" href="index.html">
+            <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"></path></svg>
+            Voltar aos eventos
+          </a>
+          <h1>Como se distribui a cultura em Portugal?</h1>
+          <p>Onde acontecem os eventos, de que tipo são, em que meses se concentram e o que mais interessa ao público.</p>
+          <p class="stats-note" id="statsNote"></p>
+        </section>
+
+        <section class="kpi-grid" aria-label="Indicadores principais">
+          <article class="kpi"><span>Eventos</span><strong id="kpiTotal">—</strong><small>na plataforma</small></article>
+          <article class="kpi"><span>Próximos</span><strong id="kpiUpcoming">—</strong><small>ainda por acontecer</small></article>
+          <article class="kpi"><span>Distritos</span><strong id="kpiDistricts">—</strong><small>com pelo menos um evento</small></article>
+          <article class="kpi"><span>Gratuitos</span><strong id="kpiFree">—</strong><small>do total de eventos</small></article>
+          <article class="kpi"><span>Visualizações</span><strong id="kpiViews">—</strong><small>soma de todos os eventos</small></article>
+        </section>
+
+        <section class="stats-grid">
+          <article class="stats-card">
+            <header>
+              <div>
+                <h2>Eventos por distrito</h2>
+                <p>Onde há mais oferta cultural?</p>
+              </div>
+              <button class="table-toggle" type="button" data-toggle-table aria-pressed="false">Ver tabela</button>
+            </header>
+            <div class="chart-box tall"><canvas id="chartDistrict" role="img" aria-label="Gráfico de barras: número de eventos por distrito"></canvas></div>
+            <table class="stats-table" id="tableDistrict"><thead><tr><th>Distrito</th><th>Eventos</th></tr></thead><tbody></tbody></table>
+          </article>
+
+          <article class="stats-card">
+            <header>
+              <div>
+                <h2>Eventos por categoria</h2>
+                <p>Que tipos de evento dominam a agenda?</p>
+              </div>
+              <button class="table-toggle" type="button" data-toggle-table aria-pressed="false">Ver tabela</button>
+            </header>
+            <div class="chart-box tall"><canvas id="chartCategory" role="img" aria-label="Gráfico de barras: número de eventos por categoria"></canvas></div>
+            <table class="stats-table" id="tableCategory"><thead><tr><th>Categoria</th><th>Eventos</th></tr></thead><tbody></tbody></table>
+          </article>
+
+          <article class="stats-card">
+            <header>
+              <div>
+                <h2>Eventos por mês</h2>
+                <p>Em que altura do ano se concentra a agenda?</p>
+              </div>
+              <button class="table-toggle" type="button" data-toggle-table aria-pressed="false">Ver tabela</button>
+            </header>
+            <div class="chart-box"><canvas id="chartMonth" role="img" aria-label="Gráfico de barras: número de eventos por mês do ano atual"></canvas></div>
+            <table class="stats-table" id="tableMonth"><thead><tr><th>Mês</th><th>Eventos</th></tr></thead><tbody></tbody></table>
+          </article>
+
+          <article class="stats-card">
+            <header>
+              <div>
+                <h2>Eventos mais vistos</h2>
+                <p>O que desperta mais interesse no público?</p>
+              </div>
+              <button class="table-toggle" type="button" data-toggle-table aria-pressed="false">Ver tabela</button>
+            </header>
+            <div class="chart-box"><canvas id="chartViews" role="img" aria-label="Gráfico de barras: eventos com mais visualizações"></canvas></div>
+            <table class="stats-table" id="tableViews"><thead><tr><th>Evento</th><th>Visualizações</th></tr></thead><tbody></tbody></table>
+          </article>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <nav class="mobile-bottom-nav" aria-label="Navegação inferior">
+    <a href="index.html#inicio">
+      <svg viewBox="0 0 24 24"><path d="M4 11.5 12 4l8 7.5"></path><path d="M6 10.5V20h12v-9.5"></path></svg>
+      Início
+    </a>
+    <a href="favorites.html">
+      <svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.4-7 10-7 10Z"></path></svg>
+      Favoritos
+    </a>
+    <a class="active" href="stats.html">
+      <svg viewBox="0 0 24 24"><path d="M4 20V10"></path><path d="M10 20V4"></path><path d="M16 20v-7"></path><path d="M22 20H2"></path></svg>
+      Dados
+    </a>
+    <a href="profile.html">
+      <svg viewBox="0 0 24 24"><path d="M4 20c1.8-4 4.9-6 8-6s6.2 2 8 6"></path><circle cx="12" cy="8" r="4"></circle></svg>
+      Perfil
+    </a>
+  </nav>
+</body>
+</html>

@@ -265,8 +265,13 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch {
       serverEventsState.items = [];
     } finally {
+      // Enquanto a base de dados não tiver eventos, usa os eventos de teste (demo-events.js).
+      if (serverEventsState.items.length === 0 && Array.isArray(window.CULTURALL_DEMO_EVENTS)) {
+        serverEventsState.items = window.CULTURALL_DEMO_EVENTS.map(normalizeServerEvent);
+      }
       serverEventsState.loaded = true;
       rerenderListingPage?.();
+      publishBridge();
     }
   };
 
@@ -359,17 +364,61 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const getVisibleEvents = () => getAllEvents().filter((event) => normalizePublicEventStatus(event.status) === 'active');
 
+  // Favoritos de visitantes (sem sessão) ficam guardados no browser.
+  const localFavoritesKey = 'culturall:favorites';
+
+  const readLocalFavorites = () => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(localFavoritesKey) ?? '[]');
+      return Array.isArray(stored) ? stored.map(normalizeEventId) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const writeLocalFavorites = (favoriteIds) => {
+    try {
+      localStorage.setItem(localFavoritesKey, JSON.stringify(favoriteIds.map(normalizeEventId)));
+    } catch {
+      // Sem armazenamento disponível: os favoritos duram apenas esta visita.
+    }
+  };
+
   const getFavoriteIds = () => {
     const session = getSession();
     if (session && serverFavoritesState.loaded) {
       return [...serverFavoritesState.ids];
     }
 
+    if (!session) {
+      return readLocalFavorites();
+    }
+
     return [];
   };
 
   const setFavoriteIds = (favoriteIds) => {
+    if (!getSession()) {
+      writeLocalFavorites(favoriteIds);
+      return;
+    }
+
     serverFavoritesState.ids = favoriteIds.map(normalizeEventId);
+  };
+
+  const updateFavoritesBadge = () => {
+    const count = getFavoriteIds().length;
+    document.querySelectorAll('.favorites-btn').forEach((button) => {
+      let badge = button.querySelector('.favorites-count');
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'favorites-count';
+        button.append(badge);
+      }
+
+      badge.textContent = count > 9 ? '9+' : String(count);
+      badge.hidden = count === 0;
+    });
   };
 
   const isFavorite = (eventId) => getFavoriteIds().includes(normalizeEventId(eventId));
@@ -403,6 +452,14 @@ document.addEventListener('DOMContentLoaded', () => {
         serverFavoritesState.ids = favoriteIds.map(normalizeEventId);
         setFavoriteIds(favoriteIds);
       }
+    }
+
+    updateFavoritesBadge();
+    const badge = document.querySelector('.favorites-btn');
+    if (badge) {
+      badge.classList.remove('bump');
+      void badge.offsetWidth;
+      badge.classList.add('bump');
     }
 
     return updatedFavoriteIds;
@@ -638,54 +695,126 @@ document.addEventListener('DOMContentLoaded', () => {
     }).format(eventDate);
   };
 
-  const buildRelatedEventCard = (event) => `
-    <article class="event-card${isPastEvent(event) ? ' is-past' : ''}" tabindex="0" role="link" aria-label="Abrir evento ${event.title}" data-event-id="${event.id}" data-event-link="${getEventDetailUrl(event.id)}" data-category="${event.category}" data-date="${event.dateBucket}" data-location="${getEventDistrict(event)}" data-price="${event.priceType}" data-title="${event.title.toLowerCase()}">
-      <div class="event-media">
-        <span class="event-pill">${event.category}</span>
-        <button class="favorite-btn${isFavorite(event.id) ? ' active' : ''}" type="button" aria-label="${getFavoriteAriaLabel(event.id)}" aria-pressed="${isFavorite(event.id) ? 'true' : 'false'}" data-event-id="${event.id}">
-          <svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.4-7 10-7 10Z"></path></svg>
-        </button>
-        <img src="${event.image}" alt="${event.title}" loading="lazy" />
-      </div>
-      <div class="event-body">
-        <h2 class="event-title">${event.title}</h2>
-        <div class="meta-list">
-          <div class="meta-item">${iconCalendar}<span>${event.dateLabel}${event.endDateLabel ? ' — ' + event.endDateLabel : ''}</span></div>
-          <div class="meta-item">${iconLocation}<span>${event.location}</span></div>
-        </div>
-        <div class="price-row">
-          <span class="price ${event.priceType === 'Gratuito' ? 'free' : ''}">${event.priceLabel}</span>
-          <span class="tagline">${event.views} visualizações</span>
-        </div>
-      </div>
-    </article>
-  `;
+  const buildRelatedEventCard = (event, index) => buildEventCard(event, index);
 
-  const buildEventCard = (event) => `
-    <article class="event-card${isPastEvent(event) ? ' is-past' : ''}" tabindex="0" role="link" aria-label="Abrir evento ${event.title}" data-event-id="${event.id}" data-event-link="${getEventDetailUrl(event.id)}" data-category="${event.category}" data-date="${event.dateBucket}" data-location="${getEventDistrict(event)}" data-price="${event.priceType}" data-title="${event.title.toLowerCase()}">
+  const monthShortLabels = ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
+
+  // Etiqueta de tempo: "Hoje", "Amanhã", "Daqui a 5 dias", "A decorrer", "Terminado".
+  const getEventTiming = (event) => {
+    const start = new Date(event.eventDate);
+    const end = event.endDate ? new Date(event.endDate) : null;
+    const now = Date.now();
+    const timing = {
+      day: String(start.getDate()).padStart(2, '0'),
+      month: monthShortLabels[start.getMonth()] ?? '',
+      label: '',
+      tone: ''
+    };
+
+    if (Number.isNaN(start.getTime())) {
+      return timing;
+    }
+
+    if (event.isRecurring) {
+      return { ...timing, label: 'Periódico', tone: 'recurring' };
+    }
+
+    if (end && start.getTime() <= now && end.getTime() >= now) {
+      return { ...timing, label: 'A decorrer', tone: 'live' };
+    }
+
+    const todayKey = getDateKey(new Date());
+    const eventKey = getDateKey(start);
+    if (eventKey < todayKey || (end && end.getTime() < now) || (!end && start.getTime() < now && eventKey !== todayKey)) {
+      return { ...timing, label: 'Terminado', tone: 'past' };
+    }
+
+    if (eventKey === todayKey) {
+      return { ...timing, label: 'Hoje', tone: 'soon' };
+    }
+
+    const days = Math.round((new Date(`${eventKey}T00:00:00`) - new Date(`${todayKey}T00:00:00`)) / 86400000);
+    if (days === 1) {
+      return { ...timing, label: 'Amanhã', tone: 'soon' };
+    }
+
+    if (days <= 7) {
+      return { ...timing, label: `Daqui a ${days} dias`, tone: 'soon' };
+    }
+
+    return { ...timing, label: '', tone: '' };
+  };
+
+  const buildEventCard = (event, index = 0) => {
+    const timing = getEventTiming(event);
+    const isFree = event.priceType === 'Gratuito';
+    return `
+    <article class="event-card${isPastEvent(event) ? ' is-past' : ''}" style="--stagger:${Math.min(index, 8)}" tabindex="0" role="link" aria-label="Abrir evento ${event.title}" data-event-id="${event.id}" data-event-link="${getEventDetailUrl(event.id)}" data-category="${event.category}" data-date="${event.dateBucket}" data-location="${getEventDistrict(event)}" data-price="${event.priceType}" data-title="${event.title.toLowerCase()}">
       <div class="event-media">
-        <span class="event-pill">${event.category}</span>
-        <button class="share-btn" type="button" aria-label="Partilhar evento" data-event-id="${event.id}">
-          <svg viewBox="0 0 24 24"><path d="M16 8a3 3 0 1 0-2.83-4H13a3 3 0 0 0 3 4Zm-8 4a3 3 0 1 0-2.83-4H5a3 3 0 0 0 3 4Zm8 8a3 3 0 1 0-2.83-4H13a3 3 0 0 0 3 4Z"></path><path d="m7.5 9.5 8 4m-8 1 8-4"></path></svg>
-        </button>
-        <button class="favorite-btn${isFavorite(event.id) ? ' active' : ''}" type="button" aria-label="${getFavoriteAriaLabel(event.id)}" aria-pressed="${isFavorite(event.id) ? 'true' : 'false'}" data-event-id="${event.id}">
-          <svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.4-7 10-7 10Z"></path></svg>
-        </button>
+        <div class="event-date-badge" aria-hidden="true"><strong>${timing.day}</strong><span>${timing.month}</span></div>
+        <div class="event-media-actions">
+          <button class="share-btn" type="button" aria-label="Partilhar evento" data-event-id="${event.id}">
+            <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><path d="m8.6 13.5 6.8 4"></path><path d="m15.4 6.5-6.8 4"></path></svg>
+          </button>
+          <button class="favorite-btn${isFavorite(event.id) ? ' active' : ''}" type="button" aria-label="${getFavoriteAriaLabel(event.id)}" aria-pressed="${isFavorite(event.id) ? 'true' : 'false'}" data-event-id="${event.id}">
+            <svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.4-7 10-7 10Z"></path></svg>
+          </button>
+        </div>
+        ${timing.label ? `<span class="event-timing ${timing.tone}">${timing.tone === 'live' ? '<i></i>' : ''}${timing.label}</span>` : ''}
         <img src="${event.image}" alt="${event.title}" loading="lazy" />
       </div>
       <div class="event-body">
+        <span class="event-pill" data-category="${event.category}">${event.category}</span>
         <h2 class="event-title">${event.title}</h2>
         <div class="meta-list">
           <div class="meta-item">${iconCalendar}<span>${event.dateLabel}${event.endDateLabel ? ' — ' + event.endDateLabel : ''}</span></div>
           <div class="meta-item">${iconLocation}<span>${event.location}</span></div>
         </div>
         <div class="price-row">
-          <span class="price ${event.priceType === 'Gratuito' ? 'free' : ''}">${event.priceLabel}</span>
-          <span class="tagline">${event.views} visualizações</span>
+          <span class="price ${isFree ? 'free' : ''}">${isFree ? 'Gratuito' : event.priceLabel}</span>
+          <span class="tagline"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"></path><circle cx="12" cy="12" r="3"></circle></svg>${event.views.toLocaleString('pt-PT')}</span>
         </div>
       </div>
     </article>
   `;
+  };
+
+  // Gera um ficheiro .ics para adicionar o evento ao calendário (Google, Apple, Outlook).
+  const downloadEventIcs = (event) => {
+    const toIcsDate = (value) => {
+      const date = new Date(value);
+      return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+    };
+    const escapeIcs = (value) => String(value ?? '').replace(/\\/g, '\\\\').replace(/[,;]/g, (match) => `\\${match}`).replace(/\n/g, '\\n');
+    const start = new Date(event.eventDate);
+    const end = event.endDate ? new Date(event.endDate) : new Date(start.getTime() + 2 * 3600000);
+    const detailUrl = new URL(getEventDetailUrl(event.id), window.location.href).href;
+    const lines = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//CulturAll//PT',
+      'BEGIN:VEVENT',
+      `UID:culturall-${event.id}@culturall.vercel.app`,
+      `DTSTAMP:${toIcsDate(new Date())}`,
+      `DTSTART:${toIcsDate(start)}`,
+      `DTEND:${toIcsDate(end)}`,
+      `SUMMARY:${escapeIcs(event.title)}`,
+      `LOCATION:${escapeIcs(event.location)}`,
+      `DESCRIPTION:${escapeIcs(`${event.description ?? ''}\n\n${detailUrl}`)}`,
+      `URL:${detailUrl}`,
+      'END:VEVENT',
+      'END:VCALENDAR'
+    ];
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${event.title.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.ics`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    showToast('Evento pronto a adicionar ao calendário');
+  };
 
   const renderEventDetailPage = () => {
     const detailRoot = document.getElementById('eventDetailRoot');
@@ -751,7 +880,12 @@ document.addEventListener('DOMContentLoaded', () => {
             <img src="${event.image}" alt="${event.title}" />
             <div class="event-detail-hero-overlay"></div>
             <div class="event-detail-hero-inner">
+              <span class="event-pill" data-category="${event.category}">${event.category}</span>
               <h1>${event.title}</h1>
+              ${(() => {
+                const timing = getEventTiming(event);
+                return timing.label ? `<span class="event-timing ${timing.tone}">${timing.tone === 'live' ? '<i></i>' : ''}${timing.label}</span>` : '';
+              })()}
             </div>
           </section>
 
@@ -786,6 +920,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
               <a class="event-detail-action primary" href="${event.ticketUrl ?? '#'}" ${event.ticketUrl ? 'target="_blank" rel="noopener noreferrer"' : ''}>Ver Bilhetes</a>
               <button class="event-detail-action secondary" id="eventDetailFavoriteBtn" type="button" data-event-id="${event.id}">${getFavoriteDetailLabel(event.id)}</button>
+              <div class="event-detail-extra-actions">
+                <button class="event-detail-action ghost" id="eventDetailCalendarBtn" type="button">
+                  <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="3"></rect><path d="M8 3v4"></path><path d="M16 3v4"></path><path d="M4 9h16"></path><path d="M12 12v5"></path><path d="M9.5 14.5h5"></path></svg>
+                  Calendário
+                </button>
+                <button class="event-detail-action ghost share-btn" type="button" data-event-id="${event.id}">
+                  <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><path d="m8.6 13.5 6.8 4"></path><path d="m15.4 6.5-6.8 4"></path></svg>
+                  Partilhar
+                </button>
+              </div>
             </aside>
           </section>
 
@@ -827,18 +971,89 @@ document.addEventListener('DOMContentLoaded', () => {
       updateDetailFavoriteLabel();
 
       eventDetailFavoriteBtn.addEventListener('click', async () => {
-        if (!getSession()) {
-          window.location.href = 'login.html';
-          return;
-        }
-
         await toggleFavorite(event.id);
         updateDetailFavoriteLabel();
       });
     }
 
+    const eventDetailCalendarBtn = document.getElementById('eventDetailCalendarBtn');
+    if (eventDetailCalendarBtn) {
+      eventDetailCalendarBtn.addEventListener('click', () => downloadEventIcs(event));
+    }
+
+    const detailExtraActions = detailRoot.querySelector('.event-detail-extra-actions');
+    detailExtraActions?.querySelector('.share-btn')?.addEventListener('click', () => {
+      void shareEvent(event.id);
+    });
+
     syncLoginHeaderState(detailRoot.ownerDocument);
     bindEventCardActions(document.getElementById('relatedEventsGrid'));
+    updateFavoritesBadge();
+  };
+
+  const showToast = (message) => {
+    let toast = document.getElementById('culturallToast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'culturallToast';
+      toast.className = 'toast';
+      toast.setAttribute('role', 'status');
+      document.body.append(toast);
+    }
+
+    toast.textContent = message;
+    toast.classList.add('visible');
+    clearTimeout(showToast.timer);
+    showToast.timer = setTimeout(() => toast.classList.remove('visible'), 2600);
+  };
+
+  const buildEventShareText = (event) => [
+    event.title,
+    event.dateLabel,
+    event.location,
+    `Ver mais: ${new URL(getEventDetailUrl(event.id), window.location.href).href}`
+  ].join('\n');
+
+  const shareEvent = async (eventId) => {
+    const eventToShare = getAllEvents().find((item) => item.id === eventId);
+    if (!eventToShare) {
+      return;
+    }
+
+    const shareData = {
+      title: eventToShare.title,
+      text: buildEventShareText(eventToShare),
+      url: new URL(getEventDetailUrl(eventToShare.id), window.location.href).href
+    };
+
+    if (navigator.share) {
+      try {
+        await navigator.share(shareData);
+        return;
+      } catch {
+        return;
+      }
+    }
+
+    const shareText = `${shareData.title}\n${shareData.text}`;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareText);
+        return;
+      }
+    } catch {
+      // Fallback abaixo.
+    }
+
+    const fallbackField = document.createElement('textarea');
+    fallbackField.value = shareText;
+    fallbackField.setAttribute('readonly', 'true');
+    fallbackField.style.position = 'absolute';
+    fallbackField.style.left = '-9999px';
+    document.body.appendChild(fallbackField);
+    fallbackField.select();
+    document.execCommand('copy');
+    fallbackField.remove();
   };
 
   const bindEventCardActions = (container, options = {}) => {
@@ -856,11 +1071,6 @@ document.addEventListener('DOMContentLoaded', () => {
       if (favoriteButton) {
         const eventId = favoriteButton.dataset.eventId;
         if (!eventId) {
-          return;
-        }
-
-        if (!getSession()) {
-          window.location.href = 'login.html';
           return;
         }
 
@@ -927,6 +1137,22 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   };
 
+  // Ponte para enhancements.js (destaques, mapa, chips e observatório).
+  const publishBridge = () => {
+    window.CulturAll = {
+      getEvents: () => getVisibleEvents(),
+      getEventDetailUrl,
+      getEventDistrict,
+      getEventTiming,
+      isPastEvent,
+      isFavorite,
+      toggleFavorite,
+      updateFavoritesBadge,
+      showToast
+    };
+    document.dispatchEvent(new CustomEvent('culturall:events-ready'));
+  };
+
   const renderListingPage = () => {
     const cardsGrid = document.getElementById('cardsGrid');
     if (!cardsGrid) {
@@ -934,16 +1160,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const session = getSession();
-    if (pageType === 'favorites' && !session) {
-      window.location.href = 'login.html';
-      return;
-    }
-
     if (pageType === 'favorites' && session && !serverFavoritesState.loaded) {
       void loadServerFavorites();
     }
 
-    bindEventCardActions(cardsGrid);
+    bindEventCardActions(cardsGrid, { onRender: () => rerenderListingPage?.() });
 
     const emptyState = document.getElementById('emptyState');
     const resultsCount = document.getElementById('resultsCount');
@@ -1070,55 +1291,6 @@ document.addEventListener('DOMContentLoaded', () => {
       loginToggleBtn.dataset.logged = 'false';
     };
 
-    const buildEventShareText = (event) => [
-      event.title,
-      event.dateLabel,
-      event.location,
-      `Ver mais: ${window.location.href}`
-    ].join('\n');
-
-    const shareEvent = async (eventId) => {
-      const eventToShare = getAllEvents().find((item) => item.id === eventId);
-      if (!eventToShare) {
-        return;
-      }
-
-      const shareData = {
-        title: eventToShare.title,
-        text: buildEventShareText(eventToShare),
-        url: window.location.href
-      };
-
-      if (navigator.share) {
-        try {
-          await navigator.share(shareData);
-          return;
-        } catch {
-          return;
-        }
-      }
-
-      const shareText = `${shareData.title}\n${shareData.text}`;
-      try {
-        if (navigator.clipboard?.writeText) {
-          await navigator.clipboard.writeText(shareText);
-          return;
-        }
-      } catch {
-        // Fallback abaixo.
-      }
-
-      const fallbackField = document.createElement('textarea');
-      fallbackField.value = shareText;
-      fallbackField.setAttribute('readonly', 'true');
-      fallbackField.style.position = 'absolute';
-      fallbackField.style.left = '-9999px';
-      document.body.appendChild(fallbackField);
-      fallbackField.select();
-      document.execCommand('copy');
-      fallbackField.remove();
-    };
-
     const updateDateControls = () => {
       if (!dateCustomControls || !dateFilter) {
         return;
@@ -1192,8 +1364,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const userLocation = getUserLocation();
 
       const sourceEvents = getListingEvents();
+      // Na página inicial, com "Todos", os eventos passados aparecem no fim numa secção própria.
+      const showPastArchive = pageType === 'home' && selectedDate === 'Todos';
       const filtered = sourceEvents.filter((event) => {
-        if (pageType !== 'favorites' && selectedDate !== 'Passados' && isPastEvent(event)) {
+        if (pageType !== 'favorites' && selectedDate !== 'Passados' && !showPastArchive && isPastEvent(event)) {
           return false;
         }
 
@@ -1221,13 +1395,38 @@ document.addEventListener('DOMContentLoaded', () => {
         return secondEvent.views - firstEvent.views;
       });
 
-      resultsCount.textContent = filtered.length;
-      cardsGrid.innerHTML = filtered.map(buildEventCard).join('');
+      const upcomingEvents = showPastArchive ? filtered.filter((event) => !isPastEvent(event)) : filtered;
+      const archivedEvents = showPastArchive ? filtered.filter((event) => isPastEvent(event)) : [];
+
+      resultsCount.textContent = upcomingEvents.length;
+      if (resultsLabel && pageType === 'home') {
+        const total = upcomingEvents.length;
+        resultsLabel.textContent = showPastArchive
+          ? (total === 1 ? 'próximo evento' : 'próximos eventos')
+          : (total === 1 ? 'evento encontrado' : 'eventos encontrados');
+      }
+      cardsGrid.innerHTML = upcomingEvents.map(buildEventCard).join('')
+        + (archivedEvents.length > 0
+          ? `<div class="cards-divider"><span>Já aconteceram</span><small>${archivedEvents.length} ${archivedEvents.length === 1 ? 'evento' : 'eventos'}</small></div>`
+            + archivedEvents.map(buildEventCard).join('')
+          : '');
 
       if (emptyState) {
-        emptyState.hidden = filtered.length > 0;
-        emptyState.textContent = page.empty;
+        const isEmpty = upcomingEvents.length === 0 && archivedEvents.length === 0;
+        emptyState.hidden = !isEmpty;
+        emptyState.innerHTML = `
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="3"></rect><path d="M8 3v4"></path><path d="M16 3v4"></path><path d="M4 9h16"></path><path d="m10 13 4 4"></path><path d="m14 13-4 4"></path></svg>
+          <strong>${page.empty}</strong>
+          ${pageType === 'favorites'
+            ? '<span>Toca no coração de um evento para o guardares aqui.</span><a class="empty-state-btn" href="index.html#eventos">Explorar eventos</a>'
+            : '<span>Experimenta alargar a data ou escolher outra categoria.</span><button class="empty-state-btn" type="button" data-reset-filters>Limpar filtros</button>'}
+        `;
       }
+
+      updateFavoritesBadge();
+      document.dispatchEvent(new CustomEvent('culturall:cards-rendered', {
+        detail: { events: upcomingEvents, archived: archivedEvents }
+      }));
     };
 
     rerenderListingPage = renderCards;
@@ -1374,37 +1573,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       });
     }
-
-    cardsGrid.addEventListener('click', (event) => {
-      const shareButton = event.target.closest('.share-btn');
-      if (shareButton) {
-        const eventId = shareButton.dataset.eventId;
-        if (eventId) {
-          void shareEvent(eventId);
-        }
-        return;
-      }
-
-      const favoriteButton = event.target.closest('.favorite-btn');
-      if (!favoriteButton) {
-        return;
-      }
-
-      const eventId = favoriteButton.dataset.eventId;
-      if (!eventId) {
-        return;
-      }
-
-      if (!getSession()) {
-        window.location.href = 'login.html';
-        return;
-      }
-
-      void (async () => {
-        await toggleFavorite(eventId);
-        renderCards();
-      })();
-    });
 
     if (loginToggleBtn) {
       loginToggleBtn.addEventListener('click', (event) => {
@@ -3443,7 +3611,7 @@ document.addEventListener('DOMContentLoaded', () => {
   void (async () => {
     await loadSessionFromApi();
 
-    if (pageType === 'event' || pageType === 'home' || pageType === 'events' || pageType === 'favorites') {
+    if (pageType === 'event' || pageType === 'home' || pageType === 'events' || pageType === 'favorites' || pageType === 'stats') {
       await loadServerEvents();
     }
 
@@ -3469,5 +3637,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderListingPage();
     renderLoginPage();
     renderProfilePage();
+    syncLoginHeaderState();
+    updateFavoritesBadge();
   })();
 });
