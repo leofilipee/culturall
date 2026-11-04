@@ -104,3 +104,23 @@ Origem: `CulturAll-melhorado.zip` aplicado sobre o projeto online (Vercel + TiDB
 
 ## Ficheiros tocados
 `script.js`, `styles.css`, `api/[...route].js`.
+
+---
+
+# Fase 4 — Base para analisar a bilheteira integrada (4 nov 2026)
+
+## Para utilizadores
+- Eventos gratuitos deixam de ter o botão "Ver Bilhetes" (não têm bilheteira). Nos pagos, o botão regista o clique e abre a bilheteira.
+- O botão "Calendário" já não mostra falsamente que o browser bloqueou a janela.
+
+## Para organizadores
+- Dashboard com visualizações, cliques, CTR, favoritos, partilhas e calendário por dia/semana/mês/trimestre/semestre/ano, comparação com o período anterior, filtro por evento, exportação CSV e comparação com a plataforma (só com amostra mínima).
+- Perfil da entidade (tipo, concelho, bilheteira própria, interesse numa bilheteira integrada).
+- Formulário: morada, cidade e distrito separados; a descrição já não se perde ao editar; categoria e local passam a ser atualizados; eventos gratuitos não guardam link.
+
+## Para administradores
+- Dashboard global com filtros (organizador, evento, categoria, distrito, dados reais/simulados), por organizador, e resumo do perfil dos organizadores.
+
+## Backend / BD
+- Nova tabela `eventointeracao` (migração `bdd/Migration_2026_11_04_analytics.sql`, também aplicada automaticamente), novas colunas (publicação, coordenadas, favdata, perfil do organizador), links de bilhetes até 2048 caracteres.
+- Validação no servidor (títulos, datas, preço, URLs http/https, categorias e distritos), escape de HTML no front-end e capas servidas por `/api/event-cover`.

@@ -64,6 +64,11 @@ CREATE TABLE organizador (
     orgestado ENUM('pendente', 'aprovado', 'suspenso') NOT NULL DEFAULT 'pendente',
     orgidutilizador INT NOT NULL UNIQUE,
     otgfotoperfil LONGBLOB,
+    -- Perfil da entidade (preenchido pelo organizador; apoia a análise de viabilidade de uma bilheteira integrada)
+    orgtipo VARCHAR(30) NULL,                 -- empresa | associacao | municipio | espaco_cultural | independente
+    orgconcelho VARCHAR(100) NULL,
+    orgtembilheteira VARCHAR(10) NULL,        -- sim | nao
+    orginteressebilheteira VARCHAR(10) NULL,  -- sim | talvez | nao
     PRIMARY KEY (idorganizador),
     KEY idx_organizador_email (orgemail),
     KEY idx_organizador_utilizador (orgidutilizador),
@@ -90,6 +95,8 @@ CREATE TABLE localizacao (
     locmorada VARCHAR(150),
     loccidade VARCHAR(100) NOT NULL,
     locdistrito VARCHAR(100) NOT NULL,
+    loclatitude DECIMAL(9,6) NULL,
+    loclongitude DECIMAL(9,6) NULL,
     PRIMARY KEY (idlocalizacao),
     KEY idx_localizacao_distrito (locdistrito),
     KEY idx_localizacao_cidade (loccidade)
@@ -105,10 +112,12 @@ CREATE TABLE evento (
     evdatainicio DATETIME NOT NULL,
     evdatafim DATETIME,
     evvalor DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-    evlinkbilhete VARCHAR(255),
+    evlinkbilhete VARCHAR(2048),
     evestado ENUM('pendente', 'ativo', 'inativo', 'publicado', 'oculto', 'recusado') NOT NULL DEFAULT 'pendente',
     evdatasubmissao DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     evdataaprovacao DATETIME,
+    evpublicaem DATETIME NULL,        -- agendamento de publicação (UTC)
+    evdatapublicacao DATETIME NULL,   -- quando o evento passou a estar publicado (UTC)
     evmotivorecusa VARCHAR(300),
     evrecorrente TINYINT(1) NOT NULL DEFAULT 0,
     evperiodicidade ENUM('semanal', 'quinzenal', 'mensal'),
@@ -179,6 +188,7 @@ CREATE TABLE favorito (
     idfavorito INT NOT NULL AUTO_INCREMENT,
     favidutilizador INT NOT NULL,
     favidevento INT NOT NULL,
+    favdata DATETIME NULL,
     PRIMARY KEY (idfavorito),
     UNIQUE KEY uq_fav (favidutilizador, favidevento),
     KEY idx_favorito_utilizador (favidutilizador),
@@ -228,4 +238,33 @@ CREATE TABLE notificacao (
     CONSTRAINT fk_not_ev FOREIGN KEY (notidevento) REFERENCES evento(idevento)
         ON UPDATE CASCADE
         ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- Tabela: eventointeracao (tabela de factos para analytics)
+-- ------------------------------------------------------------
+-- Uma linha por interação (visualização, clique em "Ver Bilhetes", favorito, partilha, adicionar ao calendário).
+-- Sem chaves estrangeiras de propósito: o histórico sobrevive ao apagar de eventos e contas, e os atributos do
+-- evento (organizador, categoria, distrito, preço) ficam copiados no momento da interação.
+-- evidatahora está na hora de Lisboa. evisimulado = 1 marca dados de teste/simulação.
+CREATE TABLE eventointeracao (
+    ideventointeracao BIGINT NOT NULL AUTO_INCREMENT,
+    evitipo ENUM('visualizacao','clique_bilhete','favorito_add','favorito_remove','partilha','calendario') NOT NULL,
+    eviidevento INT NOT NULL,
+    eviidutilizador INT NULL,
+    evisessao VARCHAR(64) NULL,
+    evidatahora DATETIME NOT NULL,
+    evidispositivo VARCHAR(10) NULL,
+    eviorigem VARCHAR(30) NULL,
+    eviidorganizador INT NULL,
+    evicategoria VARCHAR(100) NULL,
+    evidistrito VARCHAR(100) NULL,
+    evipreco DECIMAL(10,2) NULL,
+    evisimulado TINYINT(1) NOT NULL DEFAULT 0,
+    PRIMARY KEY (ideventointeracao),
+    KEY idx_evi_evento_tipo_data (eviidevento, evitipo, evidatahora),
+    KEY idx_evi_data (evidatahora),
+    KEY idx_evi_organizador_data (eviidorganizador, evidatahora),
+    KEY idx_evi_sessao (evisessao, eviidevento, evitipo),
+    KEY idx_evi_utilizador (eviidutilizador)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

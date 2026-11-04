@@ -152,6 +152,9 @@ document.addEventListener('DOMContentLoaded', () => {
   window.CulturAllObservatory = {
     mount: (root) => whenBridgeReady((bridge) => initStats(bridge, root))
   };
+  window.CulturAllAnalytics = {
+    mount: (root, options) => initAnalytics(root, options)
+  };
   document.dispatchEvent(new CustomEvent('culturall:enhancements-ready'));
 
   /* =========================================================
@@ -356,7 +359,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <span>${event.priceType === 'Gratuito' ? 'Gratuito' : escapeHtml(event.priceLabel)}</span>
               </p>
               <div class="featured-actions">
-                <a class="featured-cta" href="${bridge.getEventDetailUrl(event.id)}">
+                <a class="featured-cta" href="${bridge.getEventDetailUrl(event.id, 'destaques')}">
                   Ver evento
                   <svg viewBox="0 0 24 24"><path d="M5 12h14"></path><path d="m13 6 6 6-6 6"></path></svg>
                 </a>
@@ -525,7 +528,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         window.L.marker(coordinates, { icon, title: event.title, riseOnHover: true })
           .bindPopup(`
-            <a class="map-popup" href="${bridge.getEventDetailUrl(event.id)}">
+            <a class="map-popup" href="${bridge.getEventDetailUrl(event.id, 'mapa')}">
               <img src="${event.image}" alt="" />
               <span class="map-popup-body">
                 <small style="--pin:${color}">${escapeHtml(event.category)}</small>
@@ -616,7 +619,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       suggestions.innerHTML = `<p class="suggestion-heading">${heading}</p>` + matches.map((event, index) => `
-        <a class="suggestion" role="option" id="suggestion-${index}" href="${bridge.getEventDetailUrl(event.id)}">
+        <a class="suggestion" role="option" id="suggestion-${index}" href="${bridge.getEventDetailUrl(event.id, 'pesquisa')}">
           <img src="${event.image}" alt="" />
           <span>
             <strong>${escapeHtml(event.title)}</strong>
@@ -839,5 +842,425 @@ document.addEventListener('DOMContentLoaded', () => {
       data: { labels: topViewed.map((event) => event.title), datasets: [barDataset(topViewed.map((event) => event.views))] },
       options: barOptions(true)
     });
+  }
+
+  /* =========================================================
+   * Estatísticas de interação (Dashboard do administrador e do organizador)
+   * ---------------------------------------------------------
+   * Lê /api/analytics. Definições:
+   *  - CTR = cliques em "Ver Bilhetes" / visualizações de eventos pagos (gratuitos não têm bilheteira).
+   *  - Não há conversão em compra: a compra acontece fora da plataforma.
+   * ========================================================= */
+  function initAnalytics(root, options = {}) {
+    if (!root || root.dataset.analyticsMounted === 'true') {
+      return;
+    }
+
+    root.dataset.analyticsMounted = 'true';
+    const isAdmin = options.scope === 'admin';
+    const fmtInt = (value) => Number(value || 0).toLocaleString('pt-PT');
+    const fmtPct = (value) => (value === null || value === undefined ? '—' : `${(value * 100).toLocaleString('pt-PT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`);
+    const palette = { views: '#2a78d6', clicks: '#dd5a2d', fav: '#e87ba4', share: '#1baf7a', cal: '#eda100' };
+    const granularityLabels = { day: 'Dia', week: 'Semana', month: 'Mês', quarter: 'Trimestre', semester: 'Semestre', year: 'Ano' };
+    const dataLabels = { real: 'Dados reais', todos: 'Reais + simulados', simulado: 'Só simulados' };
+    const deviceLabels = { desktop: 'Computador', mobile: 'Telemóvel', tablet: 'Tablet' };
+    const sourceLabels = { lista: 'Lista de eventos', mapa: 'Mapa', destaques: 'Destaques', pesquisa: 'Pesquisa', relacionados: 'Eventos relacionados', perfil: 'Favoritos / perfil', partilha: 'Link partilhado', calendario: 'Link do calendário', direto: 'Acesso direto', legado: 'Histórico anterior' };
+    const typeLabels = { empresa: 'Empresa / promotora', associacao: 'Associação / coletivo', municipio: 'Município / entidade pública', espaco_cultural: 'Espaço cultural', independente: 'Independente', nr: 'Não indicado' };
+    const yesNoLabels = { sim: 'Sim', nao: 'Não', talvez: 'Talvez', nr: 'Não indicado' };
+
+    const state = { granularity: 'month', from: '', to: '', eventId: '', organizerId: '', category: '', district: '', data: 'real' };
+    let lastPayload = null;
+    let requestCounter = 0;
+    const charts = [];
+
+    root.innerHTML = `
+      <section class="analytics" aria-label="Estatísticas de interação com os eventos">
+        <header class="analytics-head">
+          <div>
+            <h2>${isAdmin ? 'Interações na plataforma' : 'Os teus eventos em números'}</h2>
+            <p>Visualizações, cliques em “Ver Bilhetes”, favoritos, partilhas e calendário. O CTR usa só eventos pagos (os gratuitos não têm bilheteira).</p>
+          </div>
+          <button class="table-toggle" type="button" data-analytics-export>Exportar CSV</button>
+        </header>
+
+        <form class="analytics-controls" aria-label="Filtros das estatísticas">
+          <label>Agrupar por
+            <select data-ctl="granularity">${Object.entries(granularityLabels).map(([value, label]) => `<option value="${value}"${value === state.granularity ? ' selected' : ''}>${label}</option>`).join('')}</select>
+          </label>
+          <label>De <input type="date" data-ctl="from" /></label>
+          <label>Até <input type="date" data-ctl="to" /></label>
+          ${isAdmin ? `
+            <label>Categoria <select data-ctl="category"><option value="">Todas</option></select></label>
+            <label>Distrito <select data-ctl="district"><option value="">Todos</option></select></label>
+            <label>Dados <select data-ctl="data">${Object.entries(dataLabels).map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}</select></label>
+          ` : `
+            <label>Evento <select data-ctl="eventId"><option value="">Todos os meus eventos</option></select></label>
+          `}
+        </form>
+
+        <div class="analytics-chips" data-chips></div>
+        <p class="analytics-note" data-note role="status" aria-live="polite">A carregar estatísticas…</p>
+        <div class="kpi-grid analytics-kpis" data-kpis></div>
+
+        <div class="stats-grid">
+          <article class="stats-card analytics-wide">
+            <header><div><h2>Visualizações e cliques em bilhetes</h2><p data-sub-volume></p></div><button class="table-toggle" type="button" data-analytics-toggle aria-pressed="false">Ver tabela</button></header>
+            <div class="chart-box"><canvas data-chart="volume" role="img" aria-label="Gráfico de barras: visualizações e cliques em bilhetes por período"></canvas></div>
+            <div class="stats-table-wrap" data-table="series"></div>
+          </article>
+          <article class="stats-card">
+            <header><div><h2>Taxa de cliques (CTR)</h2><p>Cliques ÷ visualizações de eventos pagos</p></div><button class="table-toggle" type="button" data-analytics-toggle aria-pressed="false">Ver tabela</button></header>
+            <div class="chart-box"><canvas data-chart="ctr" role="img" aria-label="Gráfico de linha: CTR por período"></canvas></div>
+            <div class="stats-table-wrap" data-table="ctr"></div>
+          </article>
+          <article class="stats-card">
+            <header><div><h2>Envolvimento</h2><p>Favoritos (líquidos), partilhas e calendário</p></div><button class="table-toggle" type="button" data-analytics-toggle aria-pressed="false">Ver tabela</button></header>
+            <div class="chart-box"><canvas data-chart="engagement" role="img" aria-label="Gráfico de barras: favoritos, partilhas e calendário por período"></canvas></div>
+            <div class="stats-table-wrap" data-table="engagement"></div>
+          </article>
+        </div>
+
+        <div class="analytics-tables" data-extra></div>
+      </section>
+    `;
+
+    const form = root.querySelector('.analytics-controls');
+    const noteEl = root.querySelector('[data-note]');
+    const kpisEl = root.querySelector('[data-kpis]');
+    const chipsEl = root.querySelector('[data-chips]');
+    const extraEl = root.querySelector('[data-extra]');
+    const control = (name) => form.querySelector(`[data-ctl="${name}"]`);
+
+    const delta = (current, previous) => {
+      if (!previous) {
+        return current ? '<small class="delta up">novo</small>' : '<small class="delta flat">—</small>';
+      }
+
+      const change = ((current - previous) / previous) * 100;
+      const rounded = Math.round(change);
+      const tone = rounded > 0 ? 'up' : rounded < 0 ? 'down' : 'flat';
+      return `<small class="delta ${tone}">${rounded > 0 ? '▲' : rounded < 0 ? '▼' : '='} ${Math.abs(rounded)}%</small>`;
+    };
+
+    const deltaPoints = (current, previous) => {
+      if (current === null || previous === null) {
+        return '<small class="delta flat">—</small>';
+      }
+
+      const points = (current - previous) * 100;
+      const tone = points > 0.05 ? 'up' : points < -0.05 ? 'down' : 'flat';
+      return `<small class="delta ${tone}">${points > 0.05 ? '▲' : points < -0.05 ? '▼' : '='} ${Math.abs(points).toLocaleString('pt-PT', { maximumFractionDigits: 1 })} p.p.</small>`;
+    };
+
+    const tableHtml = (headers, rows) => `
+      <table class="stats-table">
+        <thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead>
+        <tbody>${rows.length ? rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${headers.length}">Sem dados neste período.</td></tr>`}</tbody>
+      </table>`;
+
+    const metricRow = (item, label) => [label, fmtInt(item.views), fmtInt(item.clicks), fmtPct(item.ctr), fmtInt(item.favoritesNet), fmtInt(item.shares), fmtInt(item.calendar)];
+    const metricHeaders = (first) => [first, 'Visualizações', 'Cliques bilhetes', 'CTR', 'Favoritos (líq.)', 'Partilhas', 'Calendário'];
+
+    const destroyCharts = () => {
+      while (charts.length) {
+        charts.pop().destroy();
+      }
+    };
+
+    const buildCharts = (series) => {
+      destroyCharts();
+      if (typeof window.Chart === 'undefined') {
+        root.querySelectorAll('.analytics .stats-card').forEach((card) => card.classList.add('show-table'));
+        return;
+      }
+
+      const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const ink = isDark ? '#d8cfc6' : '#5b4d42';
+      const grid = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(114,90,67,0.10)';
+      window.Chart.defaults.font.family = '"Manrope", system-ui, sans-serif';
+      window.Chart.defaults.font.size = 12;
+      window.Chart.defaults.color = ink;
+      const labels = series.map((item) => item.label);
+      const tooltip = { backgroundColor: isDark ? '#2a2623' : '#fffaf2', titleColor: isDark ? '#fff' : '#2a2623', bodyColor: ink, borderColor: grid, borderWidth: 1, padding: 10, cornerRadius: 10 };
+      const baseOptions = (extra = {}) => ({
+        locale: 'pt-PT', responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+        plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8 } }, tooltip },
+        scales: { x: { grid: { display: false }, border: { display: false }, ticks: { maxRotation: 0, autoSkip: true } }, y: { beginAtZero: true, grid: { color: grid }, border: { display: false }, ticks: { precision: 0 } } },
+        ...extra
+      });
+      const make = (name, config) => {
+        const canvas = root.querySelector(`[data-chart="${name}"]`);
+        if (canvas) {
+          window.Chart.getChart(canvas)?.destroy();
+          charts.push(new window.Chart(canvas, config));
+        }
+      };
+      const bar = (label, key, color) => ({ label, data: series.map((item) => item[key]), backgroundColor: color, borderRadius: 4, maxBarThickness: 28 });
+
+      make('volume', { type: 'bar', data: { labels, datasets: [bar('Visualizações', 'views', palette.views), bar('Cliques em “Ver Bilhetes”', 'clicks', palette.clicks)] }, options: baseOptions() });
+      make('ctr', {
+        type: 'line',
+        data: { labels, datasets: [{ label: 'CTR (%)', data: series.map((item) => (item.ctr === null ? null : Number((item.ctr * 100).toFixed(2)))), borderColor: palette.clicks, backgroundColor: palette.clicks, pointRadius: 3, tension: 0.25, spanGaps: false }] },
+        options: baseOptions({ plugins: { legend: { display: false }, tooltip: { ...tooltip, callbacks: { label: (ctx) => (ctx.parsed.y === null ? 'Sem eventos pagos vistos' : `CTR: ${ctx.parsed.y.toLocaleString('pt-PT')}%`) } } } })
+      });
+      make('engagement', { type: 'bar', data: { labels, datasets: [bar('Favoritos (líquidos)', 'favoritesNet', palette.fav), bar('Partilhas', 'shares', palette.share), bar('Calendário', 'calendar', palette.cal)] }, options: baseOptions() });
+    };
+
+    let eventsFilled = false;
+
+    const render = (payload) => {
+      lastPayload = payload;
+
+      // Organizador: lista os seus eventos no filtro (vem na primeira resposta).
+      if (!isAdmin && !eventsFilled && Array.isArray(payload.events)) {
+        eventsFilled = true;
+        fillSelect(control('eventId'), payload.events.map((item) => ({ value: String(item.id), label: `${item.title}${item.paid ? '' : ' (gratuito)'}` })));
+        control('eventId').value = state.eventId;
+      }
+
+      const { totals, previousTotals, series, range } = payload;
+
+      // Reflete no formulário o período realmente aplicado (alinhado aos limites do agrupamento).
+      control('from').value = range.from;
+      control('to').value = range.to;
+
+      const notes = [];
+      if (totals.views === 0 && totals.clicks === 0) {
+        notes.push('Ainda sem interações registadas neste período. A recolha começa quando a nova versão entra em produção.');
+      }
+      if (totals.paidViews < 30) {
+        notes.push(`Poucos dados: só ${fmtInt(totals.paidViews)} visualizações de eventos pagos. O CTR ainda não é fiável (mínimo recomendado: 30).`);
+      }
+      if (range.incomplete) {
+        notes.push('O último período ainda não terminou; a comparação com o período anterior é indicativa.');
+      }
+      noteEl.textContent = notes.join(' ');
+      noteEl.hidden = notes.length === 0;
+
+      const kpi = (label, value, deltaHtml, hint) => `<article class="kpi" title="${escapeHtml(hint)}"><span>${escapeHtml(label)}</span><strong>${value}</strong><small>${deltaHtml} <span class="kpi-vs">vs. período anterior</span></small></article>`;
+      kpisEl.innerHTML = [
+        kpi('Visualizações', fmtInt(totals.views), delta(totals.views, previousTotals.views), 'Visitas únicas por sessão a páginas de evento (30 min entre contagens)'),
+        kpi('Visualizações (pagos)', fmtInt(totals.paidViews), delta(totals.paidViews, previousTotals.paidViews), 'Base do CTR: visualizações de eventos com preço'),
+        kpi('Cliques em bilhetes', fmtInt(totals.clicks), delta(totals.clicks, previousTotals.clicks), 'Cliques no botão “Ver Bilhetes” (redireciona para a bilheteira externa)'),
+        kpi('CTR', fmtPct(totals.ctr), deltaPoints(totals.ctr, previousTotals.ctr), 'Cliques ÷ visualizações de eventos pagos'),
+        kpi('Favoritos (líquidos)', fmtInt(totals.favoritesNet), delta(totals.favoritesNet, previousTotals.favoritesNet), 'Adicionados menos removidos'),
+        kpi('Partilhas', fmtInt(totals.shares), delta(totals.shares, previousTotals.shares), 'Partilhas concluídas ou links copiados'),
+        kpi('Calendário', fmtInt(totals.calendar), delta(totals.calendar, previousTotals.calendar), 'Cliques em “Calendário”'),
+        kpi('Sessões que clicaram', fmtPct(totals.sessionsViewed ? totals.sessionsClicked / totals.sessionsViewed : null), '<small class="delta flat">—</small>', 'Sessões com clique em bilhetes ÷ sessões com visualização')
+      ].join('');
+
+      const sub = root.querySelector('[data-sub-volume]');
+      if (sub) {
+        sub.textContent = `${granularityLabels[range.granularity]} · ${range.from} a ${range.to} · ${dataLabels[payload.dataMode]?.toLowerCase() ?? ''}`;
+      }
+
+      root.querySelector('[data-table="series"]').innerHTML = tableHtml(metricHeaders('Período'), series.map((item) => metricRow(item, escapeHtml(item.label))));
+      root.querySelector('[data-table="ctr"]').innerHTML = tableHtml(['Período', 'Visualizações (pagos)', 'Cliques', 'CTR'], series.map((item) => [escapeHtml(item.label), fmtInt(item.paidViews), fmtInt(item.clicks), fmtPct(item.ctr)]));
+      root.querySelector('[data-table="engagement"]').innerHTML = tableHtml(['Período', 'Favoritos (líq.)', 'Partilhas', 'Calendário'], series.map((item) => [escapeHtml(item.label), fmtInt(item.favoritesNet), fmtInt(item.shares), fmtInt(item.calendar)]));
+      buildCharts(series);
+
+      // Filtros ativos (clicar num evento/organizador filtra; o "×" remove).
+      const chips = [];
+      if (state.eventId) {
+        const found = payload.topEvents.find((item) => String(item.id) === String(state.eventId)) ?? payload.events?.find((item) => String(item.id) === String(state.eventId));
+        chips.push(`<button type="button" class="analytics-chip" data-clear="eventId">Evento: ${escapeHtml(found?.title ?? `#${state.eventId}`)} ×</button>`);
+      }
+      if (state.organizerId && isAdmin) {
+        const found = payload.byOrganizer?.find((item) => String(item.id) === String(state.organizerId));
+        chips.push(`<button type="button" class="analytics-chip" data-clear="organizerId">Organizador: ${escapeHtml(found?.name ?? `#${state.organizerId}`)} ×</button>`);
+      }
+      chipsEl.innerHTML = chips.join('');
+
+      const filterLink = (kind, id, text) => `<button type="button" class="analytics-link" data-filter="${kind}" data-value="${escapeHtml(id)}">${escapeHtml(text)}</button>`;
+      const breakdown = (title, rows, labelFor) => `
+        <article class="stats-card">
+          <header><div><h2>${escapeHtml(title)}</h2></div></header>
+          ${tableHtml([title.replace('Por ', ''), 'Visualizações', 'Cliques', 'CTR'], rows.map((row) => [escapeHtml(labelFor(row.label)), fmtInt(row.views), fmtInt(row.clicks), fmtPct(row.ctr)]))}
+        </article>`;
+
+      const extra = [];
+      extra.push(`
+        <article class="stats-card analytics-wide">
+          <header><div><h2>Eventos com mais interação</h2><p>Clica num evento para ver só esse evento.</p></div></header>
+          ${tableHtml(['Evento', 'Tipo', ...metricHeaders('x').slice(1)], payload.topEvents.map((item) => [filterLink('eventId', item.id, item.title), item.paid ? 'Pago' : 'Gratuito', fmtInt(item.views), fmtInt(item.clicks), item.paid ? fmtPct(item.ctr) : '—', fmtInt(item.favoritesNet), fmtInt(item.shares), fmtInt(item.calendar)]))}
+        </article>`);
+
+      if (isAdmin) {
+        extra.push(`
+          <article class="stats-card analytics-wide">
+            <header><div><h2>Por organizador</h2><p>Clica num organizador para filtrar.</p></div></header>
+            ${tableHtml(metricHeaders('Organizador'), (payload.byOrganizer ?? []).map((item) => metricRow(item, filterLink('organizerId', item.id, item.name))))}
+          </article>`);
+      } else {
+        const benchmark = payload.benchmark?.eligible
+          ? `<p>CTR dos restantes organizadores: <strong>${fmtPct(payload.benchmark.platformCtr)}</strong> · o teu: <strong>${fmtPct(totals.ctr)}</strong>. Visualizações médias por evento nos restantes: <strong>${(payload.benchmark.platformViewsPerEvent ?? 0).toLocaleString('pt-PT', { maximumFractionDigits: 1 })}</strong>.</p>`
+          : '<p>Ainda não há dados suficientes de outros organizadores para comparar (mínimo: 3 eventos e 30 visualizações de eventos pagos). Isto protege a privacidade de cada organizador.</p>';
+        extra.push(`<article class="stats-card analytics-wide"><header><div><h2>Comparação com a plataforma</h2></div></header>${benchmark}</article>`);
+      }
+
+      extra.push(breakdown('Por categoria', payload.breakdown.category, (label) => label));
+      extra.push(breakdown('Por distrito', payload.breakdown.district, (label) => label));
+      extra.push(breakdown('Por dispositivo', payload.breakdown.device, (label) => deviceLabels[label] ?? label));
+      extra.push(breakdown('Por origem da visita', payload.breakdown.source, (label) => sourceLabels[label] ?? label));
+
+      const catalog = payload.catalog;
+      extra.push(`
+        <article class="stats-card">
+          <header><div><h2>Catálogo atual</h2><p>Estado de hoje, independente do período</p></div></header>
+          ${tableHtml(['Indicador', 'Valor'], [
+            ['Eventos publicados', fmtInt(catalog.published)],
+            ['Gratuitos (sem bilheteira)', fmtInt(catalog.free)],
+            ['Pagos', fmtInt(catalog.paid)],
+            ['Pagos com link de bilhetes', fmtInt(catalog.paidWithLink)]
+          ])}
+        </article>`);
+
+      if (isAdmin && payload.organizerSurvey) {
+        const survey = payload.organizerSurvey;
+        const surveyRows = (map, labels) => Object.entries(map).sort((a, b) => b[1] - a[1]).map(([key, count]) => [escapeHtml(labels[key] ?? key), `${fmtInt(count)} (${survey.organizers ? Math.round((count / survey.organizers) * 100) : 0}%)`]);
+        extra.push(`
+          <article class="stats-card">
+            <header><div><h2>Perfil dos organizadores</h2><p>${fmtInt(survey.organizers)} organizadores aprovados · respostas voluntárias</p></div></header>
+            ${tableHtml(['Tipo de entidade', 'Organizadores'], surveyRows(survey.type, typeLabels))}
+            ${tableHtml(['Têm bilheteira própria?', 'Organizadores'], surveyRows(survey.hasTicketing, yesNoLabels))}
+            ${tableHtml(['Interesse em bilheteira integrada', 'Organizadores'], surveyRows(survey.interest, yesNoLabels))}
+          </article>`);
+      }
+
+      extraEl.innerHTML = extra.join('');
+    };
+
+    const buildQuery = () => {
+      const params = new URLSearchParams({ granularity: state.granularity });
+      ['from', 'to', 'eventId', 'organizerId', 'category', 'district'].forEach((key) => {
+        if (state[key]) {
+          params.set(key, state[key]);
+        }
+      });
+      if (isAdmin && state.data !== 'real') {
+        params.set('data', state.data);
+      }
+      return params.toString();
+    };
+
+    const load = async () => {
+      const ticket = ++requestCounter;
+      noteEl.hidden = false;
+      noteEl.textContent = 'A carregar estatísticas…';
+      try {
+        const response = await fetch(`/api/analytics?${buildQuery()}`, { credentials: 'same-origin' });
+        const payload = await response.json().catch(() => null);
+        if (ticket !== requestCounter) {
+          return;
+        }
+
+        if (!response.ok || !payload?.ok) {
+          noteEl.textContent = payload?.message ?? 'Não foi possível carregar as estatísticas.';
+          return;
+        }
+
+        render(payload);
+      } catch {
+        if (ticket === requestCounter) {
+          noteEl.textContent = 'Não foi possível carregar as estatísticas. Verifica a ligação e tenta novamente.';
+        }
+      }
+    };
+
+    // Listas de filtros (categorias, distritos, eventos do organizador).
+    const fillSelect = (select, values, labelFor = (value) => value) => {
+      values.forEach((value) => {
+        const option = document.createElement('option');
+        option.value = value.value ?? value;
+        option.textContent = value.label ?? labelFor(value);
+        select.append(option);
+      });
+    };
+
+    if (isAdmin) {
+      fillSelect(control('category'), ['Arte e Exposições', 'Bem Estar', 'Cinema', 'Comédia', 'Concertos', 'Dança', 'Família', 'Festivais', 'Gastronomia', 'Literatura', 'Mercados e Feiras', 'Moda', 'Outros', 'Teatro']);
+      fillSelect(control('district'), ['Aveiro', 'Beja', 'Braga', 'Bragança', 'Castelo Branco', 'Coimbra', 'Évora', 'Faro', 'Guarda', 'Leiria', 'Lisboa', 'Portalegre', 'Porto', 'Santarém', 'Setúbal', 'Viana do Castelo', 'Vila Real', 'Viseu', 'Outros']);
+    }
+
+    form.addEventListener('submit', (event) => event.preventDefault());
+    form.addEventListener('change', (event) => {
+      const target = event.target instanceof Element ? event.target.closest('[data-ctl]') : null;
+      if (!target) {
+        return;
+      }
+
+      const name = target.dataset.ctl;
+      state[name] = target.value;
+      if (name === 'granularity') {
+        // Muda o agrupamento: volta ao período por omissão desse agrupamento.
+        state.from = '';
+        state.to = '';
+      }
+      void load();
+    });
+
+    root.addEventListener('click', (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target) {
+        return;
+      }
+
+      const toggle = target.closest('[data-analytics-toggle]');
+      if (toggle) {
+        const card = toggle.closest('.stats-card');
+        const showTable = !card.classList.contains('show-table');
+        card.classList.toggle('show-table', showTable);
+        toggle.textContent = showTable ? 'Ver gráfico' : 'Ver tabela';
+        toggle.setAttribute('aria-pressed', String(showTable));
+        return;
+      }
+
+      const filter = target.closest('[data-filter]');
+      if (filter) {
+        state[filter.dataset.filter] = filter.dataset.value;
+        if (filter.dataset.filter === 'organizerId') {
+          state.eventId = '';
+        }
+        void load();
+        return;
+      }
+
+      const clear = target.closest('[data-clear]');
+      if (clear) {
+        state[clear.dataset.clear] = '';
+        if (!isAdmin && clear.dataset.clear === 'eventId') {
+          control('eventId').value = '';
+        }
+        void load();
+        return;
+      }
+
+      if (target.closest('[data-analytics-export]')) {
+        exportCsv();
+      }
+    });
+
+    const exportCsv = () => {
+      if (!lastPayload) {
+        return;
+      }
+
+      const cell = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+      const ctr = (value) => (value === null ? '' : (value * 100).toFixed(2).replace('.', ','));
+      const rows = [
+        ['Periodo', 'Inicio', 'Visualizacoes', 'Visualizacoes_pagos', 'Cliques_bilhete', 'CTR_%', 'Favoritos_adicionados', 'Favoritos_removidos', 'Partilhas', 'Calendario'],
+        ...lastPayload.series.map((item) => [item.key, item.start, item.views, item.paidViews, item.clicks, ctr(item.ctr), item.favoritesAdded, item.favoritesRemoved, item.shares, item.calendar])
+      ];
+      const csv = `﻿${rows.map((row) => row.map(cell).join(';')).join('\r\n')}`;
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+      link.download = `culturall-estatisticas-${lastPayload.range.granularity}-${lastPayload.range.from}-${lastPayload.range.to}.csv`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    };
+
+    void load();
   }
 });

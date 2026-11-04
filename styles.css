@@ -4539,3 +4539,318 @@ body.auth-mode .content {
     grid-template-columns: 1fr;
   }
 }
+
+/* ============================================================
+ * Estatísticas de interação (dashboards) e perfil da entidade
+ * ============================================================ */
+.analytics {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 36px;
+}
+
+.analytics-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.analytics-head h2 {
+  margin: 0;
+  font-size: 1.4rem;
+  letter-spacing: -0.03em;
+}
+
+.analytics-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  max-width: 62ch;
+}
+
+.analytics-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--line);
+}
+
+.analytics-controls label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.analytics-controls select,
+.analytics-controls input {
+  height: 38px;
+  min-width: 140px;
+  padding: 0 10px;
+  border: 1px solid rgba(174, 145, 112, 0.25);
+  border-radius: 10px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.analytics-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.analytics-chips:empty {
+  display: none;
+}
+
+.analytics-chip {
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.analytics-note {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(237, 161, 0, 0.12);
+  color: #6b4a00;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.analytics-note[hidden] {
+  display: none;
+}
+
+.analytics-kpis {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+}
+
+.analytics-kpis .kpi strong {
+  font-size: 1.8rem;
+}
+
+.analytics .delta {
+  font-weight: 800;
+}
+
+.analytics .delta.up { color: #1a7f4f; }
+.analytics .delta.down { color: #c0392b; }
+.analytics .delta.flat { color: var(--muted); }
+
+.analytics .kpi-vs {
+  font-weight: 500;
+  font-size: 0.78rem;
+}
+
+.analytics .stats-grid,
+.analytics-tables {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.analytics .analytics-wide {
+  grid-column: 1 / -1;
+}
+
+.analytics .stats-table-wrap {
+  display: none;
+  overflow-x: auto;
+}
+
+.analytics .stats-card.show-table .stats-table-wrap {
+  display: block;
+}
+
+.analytics .stats-card:not(.show-table) .chart-box + .stats-table-wrap {
+  display: none;
+}
+
+.analytics-tables .stats-card {
+  overflow-x: auto;
+}
+
+.analytics .stats-table {
+  display: table;
+  margin-bottom: 10px;
+}
+
+.analytics .stats-table th:not(:first-child),
+.analytics .stats-table td:not(:first-child) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.analytics .stats-table th {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.analytics-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--brand-dark);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.analytics-link:hover {
+  text-decoration: underline;
+}
+
+.analytics-subhead {
+  margin: 28px 0 12px;
+  font-size: 1.3rem;
+  letter-spacing: -0.03em;
+}
+
+/* Localização do evento (morada, cidade, distrito) no formulário do organizador */
+.organizer-create-form .organizer-location-field {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.organizer-create-form .organizer-location-field legend {
+  padding: 0;
+  margin-bottom: 8px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #6b5a4d;
+}
+
+.organizer-create-form .organizer-location-field label {
+  min-width: 0;
+}
+
+/* Perfil da entidade (organizador) */
+.organizer-profile-card {
+  margin-bottom: 18px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--line);
+}
+
+.organizer-profile-card summary {
+  display: flex;
+  align-items: center;
+  padding: 14px 18px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.organizer-profile-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.organizer-profile-card summary span {
+  display: grid;
+  gap: 2px;
+}
+
+.organizer-profile-card summary small {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.organizer-profile-card.is-complete summary small {
+  color: #1a7f4f;
+}
+
+.organizer-profile-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 0 18px 18px;
+}
+
+.organizer-profile-form label {
+  display: grid;
+  gap: 8px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #6b5a4d;
+}
+
+.organizer-profile-form input,
+.organizer-profile-form select {
+  width: 100%;
+  height: 42px;
+  border: 1px solid rgba(174, 145, 112, 0.18);
+  border-radius: 12px;
+  background: rgba(239, 226, 209, 0.96);
+  color: var(--text);
+  padding: 0 14px;
+  font: inherit;
+}
+
+.organizer-profile-form .organizer-create-actions,
+.organizer-profile-form .organizer-create-message {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 1024px) {
+  .analytics-kpis {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .analytics .stats-grid,
+  .analytics-tables {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .analytics-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .analytics-head {
+    flex-direction: column;
+  }
+
+  .analytics-controls label,
+  .analytics-controls select,
+  .analytics-controls input {
+    width: 100%;
+  }
+
+  .organizer-create-form .organizer-location-field,
+  .organizer-profile-form {
+    grid-template-columns: 1fr;
+  }
+}

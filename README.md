@@ -48,4 +48,16 @@ Ao criar conta, é possível escolher entre conta normal e conta de organizador.
 
 ## API
 
-Os endpoints principais são `/api/login`, `/api/register`, `/api/me`, `/api/events`, `/api/favorites`, `/api/event-views` e os endpoints administrativos em `/api/admin/*`.
+Os endpoints principais são `/api/login`, `/api/register`, `/api/me`, `/api/events`, `/api/favorites` e os endpoints administrativos em `/api/admin/*`.
+
+Estatísticas (Fase 4):
+
+- `POST /api/track` regista visualizações, favoritos (sem conta), partilhas e calendário (`/api/event-views` mantém-se por compatibilidade).
+- `GET /api/go?id=<evento>` regista o clique em "Ver Bilhetes" e redireciona (302) para a bilheteira. Só eventos pagos com link têm este botão.
+- `GET /api/analytics` (admin e organizador) devolve KPIs, série temporal (`granularity` = day, week, month, quarter, semester, year; `from`, `to`), comparação com o período anterior e quebras por evento, categoria, distrito, dispositivo e origem. O organizador só vê os seus eventos; o admin pode filtrar (`organizerId`, `eventId`, `category`, `district`, `data=real|todos|simulado`).
+- `GET/PATCH /api/organizer/profile` perfil da entidade (tipo, concelho, bilheteira própria, interesse numa bilheteira integrada).
+- `GET /api/event-cover` serve a capa como imagem em cache.
+
+**Migração:** executa `bdd/Migration_2026_11_04_analytics.sql` (ou deixa a API aplicá-la sozinha na primeira utilização, se o utilizador da BD tiver permissões de ALTER/CREATE). Sem permissões, os endpoints respondem 503 com instruções.
+
+**Definições:** CTR = cliques em "Ver Bilhetes" ÷ visualizações de eventos pagos (gratuitos ficam de fora). Não há conversão em compra, porque a compra acontece fora da plataforma. Visualizações: no máximo 1 por sessão e evento a cada 30 min; bots, o próprio organizador e administradores não contam. Datas na hora de Lisboa.

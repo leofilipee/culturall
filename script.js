@@ -133,6 +133,77 @@ document.addEventListener('DOMContentLoaded', () => {
     return payload;
   };
 
+  /* ---------- Segurança de HTML e registo de interações ---------- */
+  // Todo o texto vindo da base de dados (títulos, descrições, nomes…) passa por aqui antes de entrar em innerHTML.
+  const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]
+  ));
+  const esc = escapeHtml;
+
+  // Respostas do perfil do organizador (apoiam a análise de viabilidade da bilheteira integrada).
+  const organizerTypeLabels = {
+    empresa: 'Empresa / promotora',
+    associacao: 'Associação / coletivo',
+    municipio: 'Município / entidade pública',
+    espaco_cultural: 'Espaço cultural (teatro, sala, galeria)',
+    independente: 'Artista / produtor independente'
+  };
+  const yesNoLabels = { sim: 'Sim', nao: 'Não' };
+  const interestLabels = { sim: 'Sim', talvez: 'Talvez', nao: 'Não' };
+
+  // Identificador anónimo por separador do browser (sessionStorage). Serve apenas para não contar a mesma pessoa
+  // várias vezes e para ligar visualização -> clique; não identifica ninguém.
+  let memoryTrackingSessionId = '';
+  const createTrackingSessionId = () => {
+    try {
+      return Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) => byte.toString(36).padStart(2, '0')).join('');
+    } catch {
+      return `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
+    }
+  };
+
+  const getTrackingSessionId = () => {
+    try {
+      let id = sessionStorage.getItem('culturall:sid');
+      if (!id) {
+        id = createTrackingSessionId();
+        sessionStorage.setItem('culturall:sid', id);
+      }
+      return id;
+    } catch {
+      memoryTrackingSessionId = memoryTrackingSessionId || createTrackingSessionId();
+      return memoryTrackingSessionId;
+    }
+  };
+
+  // Eventos de teste (demo-events.js) não existem na base de dados e por isso não são registados.
+  const isTrackableEventId = (eventId) => /^\d+$/.test(String(eventId));
+
+  const trackInteraction = (eventId, type, source) => {
+    if (!isTrackableEventId(eventId)) {
+      return;
+    }
+
+    const payload = JSON.stringify({ eventId: Number(eventId), type, sessionId: getTrackingSessionId(), source: source || 'direto' });
+    try {
+      if (navigator.sendBeacon && navigator.sendBeacon('/api/track', new Blob([payload], { type: 'application/json' }))) {
+        return;
+      }
+    } catch {
+      // Cai para o fetch abaixo.
+    }
+
+    fetch('/api/track', {
+      method: 'POST',
+      credentials: 'same-origin',
+      keepalive: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: payload
+    }).catch(() => {
+      // O registo de estatísticas nunca deve afetar a navegação.
+    });
+  };
+
   const serverEventsState = {
     loaded: false,
     items: []
@@ -274,6 +345,8 @@ document.addEventListener('DOMContentLoaded', () => {
       views: Number(event.views ?? 0),
       image: event.image || defaultEventImage,
       ticketUrl: event.ticketUrl ?? '',
+      // Só eventos pagos com link de bilheteira têm o botão "Ver Bilhetes"; os gratuitos não têm bilheteira.
+      hasTicket: event.hasTicket ?? (!isFree && /^https?:\/\//i.test(String(event.ticketUrl ?? ''))),
       status: normalizePublicEventStatus(event.status),
       statusLabel: event.statusLabel ?? getEventStatusLabel(normalizePublicEventStatus(event.status)),
       organizer: event.organizer ?? '',
@@ -454,7 +527,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const isFavorite = (eventId) => getFavoriteIds().includes(normalizeEventId(eventId));
 
-  const toggleFavorite = async (eventId) => {
+  const toggleFavorite = async (eventId, source = 'direto') => {
     const session = getSession();
     if (!roleCanFavorite(session)) {
       return getFavoriteIds();
@@ -468,11 +541,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     setFavoriteIds(updatedFavoriteIds);
 
+    if (!session) {
+      // Sem conta, o favorito fica só neste browser; o servidor só regista a interação.
+      trackInteraction(eventId, favoriteIds.includes(normalizedEventId) ? 'favorito_remove' : 'favorito_add', source);
+    }
+
     if (session) {
       try {
         const response = await requestJson('/api/favorites', {
           method: 'POST',
-          body: JSON.stringify({ eventId: Number(eventId) })
+          body: JSON.stringify({ eventId: Number(eventId), sessionId: getTrackingSessionId(), source })
         });
 
         if (typeof response.favorite === 'boolean') {
@@ -584,6 +662,8 @@ document.addEventListener('DOMContentLoaded', () => {
     Viseu: 'centro',
     Outros: 'outros'
   };
+
+  const districtOptionList = Object.keys(districtRegionMap);
 
   const districtAliases = [
     { district: 'Aveiro', aliases: ['aveiro'] },
@@ -718,7 +798,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const getEventById = (eventId) => getAllEvents().find((event) => normalizeEventId(event.id) === normalizeEventId(eventId)) ?? null;
 
-  const getEventDetailUrl = (eventId) => `event.html?id=${encodeURIComponent(eventId)}`;
+  // "source" diz de onde veio a visita (lista, mapa, destaques, pesquisa, relacionados, partilha…) e alimenta as estatísticas.
+  const getEventDetailUrl = (eventId, source) => `event.html?id=${encodeURIComponent(eventId)}${source ? `&src=${encodeURIComponent(source)}` : ''}`;
 
   const formatEventDetailDate = (event) => {
     const eventDate = new Date(event.eventDate);
@@ -786,29 +867,29 @@ document.addEventListener('DOMContentLoaded', () => {
     const timing = getEventTiming(event);
     const isFree = event.priceType === 'Gratuito';
     return `
-    <article class="event-card${isPastEvent(event) ? ' is-past' : ''}" style="--stagger:${Math.min(index, 8)}" tabindex="0" role="link" aria-label="Abrir evento ${event.title}" data-event-id="${event.id}" data-event-link="${getEventDetailUrl(event.id)}" data-category="${event.category}" data-date="${event.dateBucket}" data-location="${getEventDistrict(event)}" data-price="${event.priceType}" data-title="${event.title.toLowerCase()}">
+    <article class="event-card${isPastEvent(event) ? ' is-past' : ''}" style="--stagger:${Math.min(index, 8)}" tabindex="0" role="link" aria-label="Abrir evento ${esc(event.title)}" data-event-id="${esc(event.id)}" data-event-link="${esc(getEventDetailUrl(event.id))}" data-category="${esc(event.category)}" data-date="${esc(event.dateBucket)}" data-location="${esc(getEventDistrict(event))}" data-price="${esc(event.priceType)}" data-title="${esc(event.title.toLowerCase())}">
       <div class="event-media">
         <div class="event-date-badge" aria-hidden="true"><strong>${timing.day}</strong><span>${timing.month}</span></div>
         <div class="event-media-actions">
-          <button class="share-btn" type="button" aria-label="Partilhar evento" data-event-id="${event.id}">
+          <button class="share-btn" type="button" aria-label="Partilhar evento" data-event-id="${esc(event.id)}">
             <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><path d="m8.6 13.5 6.8 4"></path><path d="m15.4 6.5-6.8 4"></path></svg>
           </button>
-          ${roleCanFavorite() ? `<button class="favorite-btn${isFavorite(event.id) ? ' active' : ''}" type="button" aria-label="${getFavoriteAriaLabel(event.id)}" aria-pressed="${isFavorite(event.id) ? 'true' : 'false'}" data-event-id="${event.id}">
+          ${roleCanFavorite() ? `<button class="favorite-btn${isFavorite(event.id) ? ' active' : ''}" type="button" aria-label="${getFavoriteAriaLabel(event.id)}" aria-pressed="${isFavorite(event.id) ? 'true' : 'false'}" data-event-id="${esc(event.id)}">
             <svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.4-7 10-7 10Z"></path></svg>
           </button>` : ''}
         </div>
         ${timing.label ? `<span class="event-timing ${timing.tone}">${timing.tone === 'live' ? '<i></i>' : ''}${timing.label}</span>` : ''}
-        <img src="${event.image}" alt="${event.title}" loading="lazy" />
+        <img src="${esc(event.image)}" alt="${esc(event.title)}" loading="lazy" />
       </div>
       <div class="event-body">
-        <span class="event-pill" data-category="${event.category}">${event.category}</span>
-        <h2 class="event-title">${event.title}</h2>
+        <span class="event-pill" data-category="${esc(event.category)}">${esc(event.category)}</span>
+        <h2 class="event-title">${esc(event.title)}</h2>
         <div class="meta-list">
-          <div class="meta-item">${iconCalendar}<span>${event.dateLabel}${event.endDateLabel ? ' — ' + event.endDateLabel : ''}</span></div>
-          <div class="meta-item">${iconLocation}<span>${event.location}</span></div>
+          <div class="meta-item">${iconCalendar}<span>${esc(event.dateLabel)}${event.endDateLabel ? ' — ' + esc(event.endDateLabel) : ''}</span></div>
+          <div class="meta-item">${iconLocation}<span>${esc(event.location)}</span></div>
         </div>
         <div class="price-row">
-          <span class="price ${isFree ? 'free' : ''}">${isFree ? 'Gratuito' : event.priceLabel}</span>
+          <span class="price ${isFree ? 'free' : ''}">${isFree ? 'Gratuito' : esc(event.priceLabel)}</span>
           <span class="tagline"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"></path><circle cx="12" cy="12" r="3"></circle></svg>${event.views.toLocaleString('pt-PT')}</span>
         </div>
       </div>
@@ -819,7 +900,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Abre o evento diretamente no Google Calendar, já preenchido (título, data, local e descrição).
   const calendarWeekdayCodes = { Seg: 'MO', Ter: 'TU', Qua: 'WE', Qui: 'TH', Sex: 'FR', 'Sáb': 'SA', Dom: 'SU' };
 
-  const openEventInCalendar = (event) => {
+  const openEventInCalendar = (event, source = 'direto') => {
     const toCalendarDate = (value) => new Date(value).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
     const start = new Date(event.eventDate);
     if (Number.isNaN(start.getTime())) {
@@ -830,7 +911,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const end = event.endDate && !Number.isNaN(new Date(event.endDate).getTime())
       ? new Date(event.endDate)
       : new Date(start.getTime() + 2 * 3600000);
-    const detailUrl = new URL(getEventDetailUrl(event.id), window.location.href).href;
+    const detailUrl = new URL(getEventDetailUrl(event.id, 'calendario'), window.location.href).href;
     const params = new URLSearchParams({
       action: 'TEMPLATE',
       text: event.title,
@@ -844,12 +925,18 @@ document.addEventListener('DOMContentLoaded', () => {
       params.set('recur', `RRULE:FREQ=WEEKLY${days.length > 0 ? `;BYDAY=${days.join(',')}` : ''}`);
     }
 
-    const calendarWindow = window.open(`https://calendar.google.com/calendar/render?${params.toString()}`, '_blank', 'noopener');
+    // Com a opção 'noopener', window.open devolve sempre null (parecia bloqueado mesmo quando abria); por isso
+    // abre-se normalmente e remove-se a ligação ao separador original logo a seguir.
+    const calendarWindow = window.open(`https://calendar.google.com/calendar/render?${params.toString()}`, '_blank');
+    if (calendarWindow) {
+      calendarWindow.opener = null;
+    }
     if (!calendarWindow) {
       showToast('O browser bloqueou a abertura do calendário. Permite pop-ups para este site.');
       return;
     }
 
+    trackInteraction(event.id, 'calendario', source);
     showToast('A abrir o Google Calendar…');
   };
 
@@ -868,12 +955,17 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    void requestJson('/api/event-views', {
-      method: 'POST',
-      body: JSON.stringify({ eventId: Number(event.id) })
-    }).catch(() => {
-      // Mantém a página funcional mesmo se o tracking de visualizações falhar.
-    });
+    const knownSources = ['lista', 'mapa', 'destaques', 'pesquisa', 'relacionados', 'perfil', 'partilha', 'calendario'];
+    const requestedSource = url.searchParams.get('src');
+    const detailSource = knownSources.includes(requestedSource) ? requestedSource : 'direto';
+    trackInteraction(event.id, 'visualizacao', detailSource);
+
+    // Eventos pagos com bilheteira passam por /api/go (regista o clique e redireciona). Os de teste (demo) vão direto.
+    const ticketHref = !event.hasTicket
+      ? ''
+      : isTrackableEventId(event.id)
+        ? `/api/go?id=${encodeURIComponent(event.id)}&s=${encodeURIComponent(getTrackingSessionId())}&src=${encodeURIComponent(detailSource)}`
+        : event.ticketUrl;
 
     const session = getSession();
     const relatedEvents = getVisibleEvents()
@@ -914,8 +1006,8 @@ document.addEventListener('DOMContentLoaded', () => {
           </section>
 
           <section class="event-detail-head">
-            <span class="event-pill" data-category="${event.category}">${event.category}</span>
-            <h1>${event.title}</h1>
+            <span class="event-pill" data-category="${esc(event.category)}">${esc(event.category)}</span>
+            <h1>${esc(event.title)}</h1>
             ${(() => {
               const timing = getEventTiming(event);
               return timing.label ? `<span class="event-timing ${timing.tone}">${timing.tone === 'live' ? '<i></i>' : ''}${timing.label}</span>` : '';
@@ -927,7 +1019,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <section class="event-detail-content">
             <article class="event-detail-card event-detail-about">
               <h2>Sobre o Evento</h2>
-              <p>${event.description ?? 'Descrição indisponível no momento. Este evento faz parte da seleção cultural da plataforma.'}</p>
+              <p>${esc(event.description || 'Descrição indisponível no momento. Este evento faz parte da seleção cultural da plataforma.')}</p>
             </article>
 
             <aside class="event-detail-card event-detail-info">
@@ -940,27 +1032,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
               <div class="event-detail-info-row">
                 <span class="event-detail-info-label">Localização</span>
-                <strong>${event.location}</strong>
+                <strong>${esc(event.location)}</strong>
               </div>
 
               <div class="event-detail-info-row">
                 <span class="event-detail-info-label">Organizador</span>
-                <strong>${event.organizer ?? 'Organização do evento'}</strong>
+                <strong>${esc(event.organizer || 'Organização do evento')}</strong>
               </div>
 
               <div class="event-detail-info-row">
                 <span class="event-detail-info-label">Preço</span>
-                <strong class="event-detail-price ${event.priceType === 'Gratuito' ? 'free' : ''}">${event.priceLabel}</strong>
+                <strong class="event-detail-price ${event.priceType === 'Gratuito' ? 'free' : ''}">${esc(event.priceLabel)}</strong>
               </div>
 
-              <a class="event-detail-action primary" href="${event.ticketUrl ?? '#'}" ${event.ticketUrl ? 'target="_blank" rel="noopener noreferrer"' : ''}>Ver Bilhetes</a>
-              ${roleCanFavorite(session) ? `<button class="event-detail-action secondary" id="eventDetailFavoriteBtn" type="button" data-event-id="${event.id}">${getFavoriteDetailLabel(event.id)}</button>` : ''}
+              ${ticketHref ? `<a class="event-detail-action primary" id="eventDetailTicketBtn" href="${esc(ticketHref)}" target="_blank" rel="noopener noreferrer">Ver Bilhetes</a>` : ''}
+              ${roleCanFavorite(session) ? `<button class="event-detail-action secondary" id="eventDetailFavoriteBtn" type="button" data-event-id="${esc(event.id)}">${getFavoriteDetailLabel(event.id)}</button>` : ''}
               <div class="event-detail-extra-actions">
                 <button class="event-detail-action ghost" id="eventDetailCalendarBtn" type="button">
                   <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="3"></rect><path d="M8 3v4"></path><path d="M16 3v4"></path><path d="M4 9h16"></path><path d="M12 12v5"></path><path d="M9.5 14.5h5"></path></svg>
                   Calendário
                 </button>
-                <button class="event-detail-action ghost share-btn" type="button" data-event-id="${event.id}">
+                <button class="event-detail-action ghost share-btn" type="button" data-event-id="${esc(event.id)}">
                   <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><path d="m8.6 13.5 6.8 4"></path><path d="m15.4 6.5-6.8 4"></path></svg>
                   Partilhar
                 </button>
@@ -1006,23 +1098,23 @@ document.addEventListener('DOMContentLoaded', () => {
       updateDetailFavoriteLabel();
 
       eventDetailFavoriteBtn.addEventListener('click', async () => {
-        await toggleFavorite(event.id);
+        await toggleFavorite(event.id, detailSource);
         updateDetailFavoriteLabel();
       });
     }
 
     const eventDetailCalendarBtn = document.getElementById('eventDetailCalendarBtn');
     if (eventDetailCalendarBtn) {
-      eventDetailCalendarBtn.addEventListener('click', () => openEventInCalendar(event));
+      eventDetailCalendarBtn.addEventListener('click', () => openEventInCalendar(event, detailSource));
     }
 
     const detailExtraActions = detailRoot.querySelector('.event-detail-extra-actions');
     detailExtraActions?.querySelector('.share-btn')?.addEventListener('click', () => {
-      void shareEvent(event.id);
+      void shareEvent(event.id, detailSource);
     });
 
     syncLoginHeaderState(detailRoot.ownerDocument);
-    bindEventCardActions(document.getElementById('relatedEventsGrid'));
+    bindEventCardActions(document.getElementById('relatedEventsGrid'), { source: 'relacionados' });
     updateFavoritesBadge();
     initEventGallery(event);
   };
@@ -1175,10 +1267,10 @@ document.addEventListener('DOMContentLoaded', () => {
     event.title,
     event.dateLabel,
     event.location,
-    `Ver mais: ${new URL(getEventDetailUrl(event.id), window.location.href).href}`
+    `Ver mais: ${new URL(getEventDetailUrl(event.id, 'partilha'), window.location.href).href}`
   ].join('\n');
 
-  const shareEvent = async (eventId) => {
+  const shareEvent = async (eventId, source = 'direto') => {
     const eventToShare = getAllEvents().find((item) => item.id === eventId);
     if (!eventToShare) {
       return;
@@ -1187,14 +1279,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const shareData = {
       title: eventToShare.title,
       text: buildEventShareText(eventToShare),
-      url: new URL(getEventDetailUrl(eventToShare.id), window.location.href).href
+      url: new URL(getEventDetailUrl(eventToShare.id, 'partilha'), window.location.href).href
     };
 
     if (navigator.share) {
       try {
         await navigator.share(shareData);
+        trackInteraction(eventToShare.id, 'partilha', source);
         return;
       } catch {
+        // Partilha cancelada: não conta.
         return;
       }
     }
@@ -1203,6 +1297,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(shareText);
+        trackInteraction(eventToShare.id, 'partilha', source);
         return;
       }
     } catch {
@@ -1218,12 +1313,28 @@ document.addEventListener('DOMContentLoaded', () => {
     fallbackField.select();
     document.execCommand('copy');
     fallbackField.remove();
+    trackInteraction(eventToShare.id, 'partilha', source);
   };
 
   const bindEventCardActions = (container, options = {}) => {
     if (!container) {
       return;
     }
+
+    // Origem da visita, para as estatísticas: pesquisa ativa, página de favoritos, ou lista normal.
+    const resolveCardSource = () => {
+      if (options.source) {
+        return options.source;
+      }
+
+      if (document.getElementById('searchInput')?.value.trim()) {
+        return 'pesquisa';
+      }
+
+      return pageType === 'favorites' ? 'perfil' : 'lista';
+    };
+
+    const withCardSource = (link) => `${link}${link.includes('?') ? '&' : '?'}src=${encodeURIComponent(resolveCardSource())}`;
 
     container.addEventListener('click', (event) => {
       const target = event.target;
@@ -1239,7 +1350,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         void (async () => {
-          await toggleFavorite(eventId);
+          await toggleFavorite(eventId, resolveCardSource());
           const isEventFavorite = isFavorite(eventId);
           favoriteButton.classList.toggle('active', isEventFavorite);
           favoriteButton.setAttribute('aria-label', getFavoriteAriaLabel(eventId));
@@ -1258,7 +1369,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (shareButton) {
         const eventId = shareButton.dataset.eventId;
         if (eventId) {
-          void shareEvent(eventId);
+          void shareEvent(eventId, resolveCardSource());
         }
         return;
       }
@@ -1273,7 +1384,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      window.location.href = link;
+      window.location.href = withCardSource(link);
     });
 
     container.addEventListener('keydown', (event) => {
@@ -1297,7 +1408,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       event.preventDefault();
-      window.location.href = link;
+      window.location.href = withCardSource(link);
     });
   };
 
@@ -1312,6 +1423,7 @@ document.addEventListener('DOMContentLoaded', () => {
       isFavorite,
       canFavorite: () => roleCanFavorite(),
       toggleFavorite,
+      trackInteraction,
       updateFavoritesBadge,
       showToast
     };
@@ -2020,6 +2132,19 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('culturall:enhancements-ready', () => window.CulturAllObservatory?.mount(root), { once: true });
   };
 
+  const mountAnalytics = (root, scope) => {
+    if (!root) {
+      return;
+    }
+
+    if (window.CulturAllAnalytics) {
+      window.CulturAllAnalytics.mount(root, { scope });
+      return;
+    }
+
+    document.addEventListener('culturall:enhancements-ready', () => window.CulturAllAnalytics?.mount(root, { scope }), { once: true });
+  };
+
   const renderProfilePage = () => {
     const profileRoot = document.getElementById('profileRoot');
     if (!profileRoot) {
@@ -2087,18 +2212,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 <div class="profile-summary-card">
                   <div class="profile-summary-row">
-                    <div class="profile-avatar" id="profileAvatar">${initials}</div>
+                    <div class="profile-avatar" id="profileAvatar">${esc(initials)}</div>
                     <div>
-                      <strong id="profileName">${session.name}</strong>
-                      <p id="profileRole">${session.roleLabel}</p>
-                      <p id="profileEmail">${session.email}</p>
+                      <strong id="profileName">${esc(session.name)}</strong>
+                      <p id="profileRole">${esc(session.roleLabel)}</p>
+                      <p id="profileEmail">${esc(session.email)}</p>
                     </div>
                   </div>
 
                   <div class="profile-location-box">
                     <label for="profileLocationInput">Localização para proximidade</label>
                     <div class="profile-location-row">
-                      <input id="profileLocationInput" type="text" placeholder="Ex.: Lisboa" value="${session.location ?? ''}" />
+                      <input id="profileLocationInput" type="text" placeholder="Ex.: Lisboa" value="${esc(session.location ?? '')}" />
                       <button id="profileLocationSaveBtn" type="button">Guardar</button>
                     </div>
                   </div>
@@ -2340,6 +2465,10 @@ document.addEventListener('DOMContentLoaded', () => {
         return {
           name: organizer.name,
           email: organizer.email,
+          type: organizer.type ?? '',
+          council: organizer.council ?? '',
+          hasTicketing: organizer.hasTicketing ?? '',
+          interest: organizer.interest ?? '',
           registered: organizer.registered ?? formatAdminDate(organizer.registeredAt),
           created: organizer.created ?? organizer.eventCount ?? 0,
           statusCode,
@@ -2363,9 +2492,9 @@ document.addEventListener('DOMContentLoaded', () => {
             tableBody.innerHTML = `
               <tr>
                 <td colspan="6" class="admin-table-empty">
-                  ${error instanceof Error && error.message
+                  ${esc(error instanceof Error && error.message
                     ? error.message
-                    : 'Não foi possível carregar os utilizadores.'}
+                    : 'Não foi possível carregar os utilizadores.')}
                 </td>
               </tr>
             `;
@@ -2382,7 +2511,11 @@ document.addEventListener('DOMContentLoaded', () => {
               email: organizer.email,
               registeredAt: organizer.registeredAt,
               eventCount: organizer.eventCount,
-              status: organizer.status
+              status: organizer.status,
+              type: organizer.type,
+              council: organizer.council,
+              hasTicketing: organizer.hasTicketing,
+              interest: organizer.interest
             }));
             renderAdminOrganizersTable();
           }
@@ -2392,9 +2525,9 @@ document.addEventListener('DOMContentLoaded', () => {
             tableBody.innerHTML = `
               <tr>
                 <td colspan="5" class="admin-table-empty">
-                  ${error instanceof Error && error.message
+                  ${esc(error instanceof Error && error.message
                     ? error.message
-                    : 'Não foi possível carregar os organizadores.'}
+                    : 'Não foi possível carregar os organizadores.')}
                 </td>
               </tr>
             `;
@@ -2439,6 +2572,10 @@ document.addEventListener('DOMContentLoaded', () => {
               <div><span>Email</span><strong id="adminOrganizerEmail"></strong></div>
               <div><span>Data de Registo</span><strong id="adminOrganizerRegistered"></strong></div>
               <div><span>Eventos Criados</span><strong id="adminOrganizerCreated"></strong></div>
+              <div><span>Tipo de entidade</span><strong id="adminOrganizerType"></strong></div>
+              <div><span>Concelho</span><strong id="adminOrganizerCouncil"></strong></div>
+              <div><span>Bilheteira própria</span><strong id="adminOrganizerTicketing"></strong></div>
+              <div><span>Interesse em bilheteira integrada</span><strong id="adminOrganizerInterest"></strong></div>
               <div><span>Estado</span><strong id="adminOrganizerStatus"></strong></div>
             </div>
           </div>
@@ -2540,6 +2677,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
           <div class="admin-panels">
             <section class="admin-panel active" data-admin-pane="dashboard">
+              <div data-analytics></div>
+              <h2 class="analytics-subhead">Oferta cultural na plataforma</h2>
               <div data-observatory>${buildObservatoryMarkup()}</div>
             </section>
 
@@ -2620,6 +2759,7 @@ document.addEventListener('DOMContentLoaded', () => {
       profileRoot.appendChild(adminEventActionModal);
       profileRoot.appendChild(adminDeleteModal);
       mountObservatory(profileRoot.querySelector('[data-observatory]'));
+      mountAnalytics(profileRoot.querySelector('[data-analytics]'), 'admin');
 
       profileMobileNav.innerHTML = `
         <a href="index.html">
@@ -2693,20 +2833,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
           return `
           <tr>
-            <td>${user.name}</td>
-            <td>${user.email}</td>
-            <td>${user.registered}</td>
-            <td>${user.events}</td>
+            <td>${esc(user.name)}</td>
+            <td>${esc(user.email)}</td>
+            <td>${esc(user.registered)}</td>
+            <td>${esc(user.events)}</td>
             <td><span class="admin-pill ${isActive ? 'success' : 'danger'}">${getUserStatusLabel(isActive)}</span></td>
             <td>
               <div class="admin-actions-group">
-                <button type="button" class="admin-icon-btn" aria-label="Ver utilizador" data-admin-user-view="${user.email}">
+                <button type="button" class="admin-icon-btn" aria-label="Ver utilizador" data-admin-user-view="${esc(user.email)}">
                   <svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
                 </button>
-                <button type="button" class="admin-icon-btn" aria-label="${userAction.ariaLabel}" data-admin-user-action="${userAction.action}" data-admin-user-email="${user.email}">
+                <button type="button" class="admin-icon-btn" aria-label="${userAction.ariaLabel}" data-admin-user-action="${userAction.action}" data-admin-user-email="${esc(user.email)}">
                   ${userAction.icon}
                 </button>
-                ${canDeleteAdminUser(user) ? `<button type="button" class="admin-icon-btn danger" aria-label="Eliminar utilizador" data-admin-delete-kind="user" data-admin-delete-email="${user.email}">
+                ${canDeleteAdminUser(user) ? `<button type="button" class="admin-icon-btn danger" aria-label="Eliminar utilizador" data-admin-delete-kind="user" data-admin-delete-email="${esc(user.email)}">
                   <svg viewBox="0 0 24 24"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M6 7l1 13h10l1-13"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg>
                 </button>` : ''}
               </div>
@@ -2726,6 +2866,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const adminOrganizerEmail = adminOrganizerProfileModal.querySelector('#adminOrganizerEmail');
       const adminOrganizerRegistered = adminOrganizerProfileModal.querySelector('#adminOrganizerRegistered');
       const adminOrganizerCreated = adminOrganizerProfileModal.querySelector('#adminOrganizerCreated');
+      const adminOrganizerType = adminOrganizerProfileModal.querySelector('#adminOrganizerType');
+      const adminOrganizerCouncil = adminOrganizerProfileModal.querySelector('#adminOrganizerCouncil');
+      const adminOrganizerTicketing = adminOrganizerProfileModal.querySelector('#adminOrganizerTicketing');
+      const adminOrganizerInterest = adminOrganizerProfileModal.querySelector('#adminOrganizerInterest');
       const adminOrganizerStatus = adminOrganizerProfileModal.querySelector('#adminOrganizerStatus');
       const adminOrganizerActionModalTitle = adminOrganizerActionModal.querySelector('#adminOrganizerActionModalTitle');
       const adminOrganizerActionModalText = adminOrganizerActionModal.querySelector('#adminOrganizerActionModalText');
@@ -2733,6 +2877,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const adminOrganizersTableBody = profileRoot.querySelector('[data-admin-organizers]');
       let selectedAdminOrganizerEmail = '';
       let selectedAdminOrganizerAction = 'suspend';
+      let selectedAdminEventId = '';
+      let selectedAdminEventAction = 'approve';
 
       const getAdminEventById = (eventId) => adminEventsState.items.find((event) => String(event.id) === String(eventId)) ?? null;
       const getAdminOrganizerByEmail = (email) => adminOrganizers.find((organizer) => organizer.email === email) ?? null;
@@ -2748,11 +2894,11 @@ document.addEventListener('DOMContentLoaded', () => {
             ? pendingEvents.map((event) => `
                 <article class="admin-review-item">
                   <div>
-                    <strong>${event.title}</strong>
-                    <p>Categoria: ${event.category}</p>
-                    <p>Data do evento: ${event.dateLabel ?? event.date ?? 'A definir'}${event.endDateLabel ? ' — ' + event.endDateLabel : ''}</p>
-                    <p>Organizador: ${event.organizerName ?? event.organizerEmail ?? 'Organizador'}</p>
-                    <p>Submetido em: ${event.submittedAt ?? 'Pendente'}</p>
+                    <strong>${esc(event.title)}</strong>
+                    <p>Categoria: ${esc(event.category)}</p>
+                    <p>Data do evento: ${esc(event.dateLabel ?? event.date ?? 'A definir')}${event.endDateLabel ? ' — ' + esc(event.endDateLabel) : ''}</p>
+                    <p>Organizador: ${esc(event.organizerName ?? event.organizerEmail ?? 'Organizador')}</p>
+                    <p>Submetido em: ${esc(event.submittedAt || 'Pendente')}</p>
                   </div>
                   <div class="admin-review-actions">
                     <button type="button" class="admin-approve-btn" data-admin-event-action="approve" data-admin-event-id="${event.id}">✓ Aprovar</button>
@@ -2776,10 +2922,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 return `
                   <tr>
-                    <td>${event.title}</td>
-                    <td>${event.category}</td>
-                    <td>${event.dateLabel ?? event.date ?? 'A definir'}${event.endDateLabel ? ' — ' + event.endDateLabel : ''}</td>
-                    <td>${event.organizerName ?? event.organizerEmail ?? 'Organizador'}</td>
+                    <td>${esc(event.title)}</td>
+                    <td>${esc(event.category)}</td>
+                    <td>${esc(event.dateLabel ?? event.date ?? 'A definir')}${event.endDateLabel ? ' — ' + esc(event.endDateLabel) : ''}</td>
+                    <td>${esc(event.organizerName ?? event.organizerEmail ?? 'Organizador')}</td>
                     <td><span class="admin-pill ${status === 'hidden' || status === 'pending' ? 'warning' : 'success'}">${normalizeAdminEventStatusLabel(status)}</span></td>
                     <td>
                       <div class="admin-actions-group">
@@ -2815,18 +2961,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
           return `
             <tr>
-              <td>${organizer.name}</td>
-              <td>${organizer.email}</td>
-              <td>${organizer.registered}</td>
-              <td>${organizer.created}</td>
-              <td><span class="admin-pill ${isActive ? 'success' : organizer.statusCode === 'pendente' ? 'warning' : 'danger'}">${organizer.status}</span></td>
+              <td>${esc(organizer.name)}</td>
+              <td>${esc(organizer.email)}</td>
+              <td>${esc(organizer.registered)}</td>
+              <td>${esc(organizer.created)}</td>
+              <td><span class="admin-pill ${isActive ? 'success' : organizer.statusCode === 'pendente' ? 'warning' : 'danger'}">${esc(organizer.status)}</span></td>
               <td>
                 <div class="admin-actions-group">
-                  <button type="button" class="admin-icon-btn" aria-label="Ver organizador" data-admin-organizer-view="${organizer.email}">
+                  <button type="button" class="admin-icon-btn" aria-label="Ver organizador" data-admin-organizer-view="${esc(organizer.email)}">
                     <svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
                   </button>
-                  <button type="button" class="admin-icon-btn" aria-label="${organizerAction.ariaLabel}" data-admin-organizer-action="${organizerAction.action}" data-admin-organizer-email="${organizer.email}">${organizerAction.icon}</button>
-                  <button type="button" class="admin-icon-btn danger" aria-label="Eliminar organizador" data-admin-delete-kind="organizer" data-admin-delete-email="${organizer.email}"><svg viewBox="0 0 24 24"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M6 7l1 13h10l1-13"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg></button>
+                  <button type="button" class="admin-icon-btn" aria-label="${organizerAction.ariaLabel}" data-admin-organizer-action="${organizerAction.action}" data-admin-organizer-email="${esc(organizer.email)}">${organizerAction.icon}</button>
+                  <button type="button" class="admin-icon-btn danger" aria-label="Eliminar organizador" data-admin-delete-kind="organizer" data-admin-delete-email="${esc(organizer.email)}"><svg viewBox="0 0 24 24"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M6 7l1 13h10l1-13"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg></button>
                 </div>
               </td>
             </tr>
@@ -2880,6 +3026,11 @@ document.addEventListener('DOMContentLoaded', () => {
         adminOrganizerRegistered.textContent = organizer.registered;
         adminOrganizerCreated.textContent = String(organizer.created);
         adminOrganizerStatus.textContent = organizer.status;
+        const notProvided = 'Não indicado';
+        if (adminOrganizerType) adminOrganizerType.textContent = organizerTypeLabels[organizer.type] ?? notProvided;
+        if (adminOrganizerCouncil) adminOrganizerCouncil.textContent = organizer.council || notProvided;
+        if (adminOrganizerTicketing) adminOrganizerTicketing.textContent = yesNoLabels[organizer.hasTicketing] ?? notProvided;
+        if (adminOrganizerInterest) adminOrganizerInterest.textContent = interestLabels[organizer.interest] ?? notProvided;
         openAdminModal(adminOrganizerProfileModal);
       };
 
@@ -3231,21 +3382,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
         tableBody.innerHTML = createdEvents.map((event) => `
           <tr>
-            <td class="organizer-event-title">${event.title}</td>
-            <td>${event.category}</td>
-            <td>${event.date ?? event.dateLabel ?? ''}</td>
-            <td>${event.location}</td>
-            <td><span class="organizer-badge ${event.scheduledFor ? 'scheduled' : (event.status ?? 'published')}">${event.statusLabel ?? 'Publicado'}</span></td>
-            <td><span class="organizer-metric"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"></path></svg>${event.views ?? 0}</span></td>
+            <td class="organizer-event-title">${esc(event.title)}</td>
+            <td>${esc(event.category)}</td>
+            <td>${esc(event.date ?? event.dateLabel ?? '')}</td>
+            <td>${esc(event.location)}</td>
+            <td><span class="organizer-badge ${event.scheduledFor ? 'scheduled' : esc(event.status ?? 'published')}">${esc(event.statusLabel ?? 'Publicado')}</span></td>
+            <td><span class="organizer-metric"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"></path></svg>${Number(event.views ?? 0)}</span></td>
             <td>
               <div class="organizer-actions-cell" aria-label="Ações do evento">
-                <button type="button" class="icon-btn" data-organizer-event-id="${event.id}" data-organizer-event-action="view" aria-label="Ver evento">
+                <button type="button" class="icon-btn" data-organizer-event-id="${esc(event.id)}" data-organizer-event-action="view" aria-label="Ver evento">
                   <svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
                 </button>
-                <button type="button" class="icon-btn" data-organizer-event-id="${event.id}" data-organizer-event-action="edit" aria-label="Editar evento">
+                <button type="button" class="icon-btn" data-organizer-event-id="${esc(event.id)}" data-organizer-event-action="edit" aria-label="Editar evento">
                   <svg viewBox="0 0 24 24"><path d="M4 20h4l10-10a2.5 2.5 0 0 0-4-4L4 16v4Z"></path></svg>
                 </button>
-                <button type="button" class="icon-btn" data-organizer-event-id="${event.id}" data-organizer-event-action="manage" aria-label="Gerir evento">
+                <button type="button" class="icon-btn" data-organizer-event-id="${esc(event.id)}" data-organizer-event-action="manage" aria-label="Gerir evento">
                   <svg viewBox="0 0 24 24"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M6 7l1 13h10l1-13"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg>
                 </button>
               </div>
@@ -3391,10 +3542,51 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
 
           <section class="organizer-pane" data-organizer-pane="dashboard" hidden>
-            <div data-observatory>${buildObservatoryMarkup()}</div>
+            <div data-analytics></div>
+              <h2 class="analytics-subhead">Oferta cultural na plataforma</h2>
+              <div data-observatory>${buildObservatoryMarkup()}</div>
           </section>
 
           <section class="organizer-pane" data-organizer-pane="management">
+          <details class="organizer-profile-card" id="organizerProfileCard">
+            <summary>
+              <span><strong>Perfil da entidade</strong><small id="organizerProfileSummary">Ajuda-nos a perceber como vendes bilhetes (2 minutos).</small></span>
+            </summary>
+            <form class="organizer-profile-form" id="organizerProfileForm">
+              <label>
+                Tipo de entidade
+                <select id="organizerProfileType">
+                  <option value="">Prefiro não indicar</option>
+                  ${Object.entries(organizerTypeLabels).map(([value, label]) => `<option value="${value}">${esc(label)}</option>`).join('')}
+                </select>
+              </label>
+              <label>
+                Concelho
+                <input id="organizerProfileCouncil" type="text" maxlength="100" placeholder="Ex.: Vila Nova de Gaia" />
+              </label>
+              <label>
+                Já tens bilheteira própria?
+                <select id="organizerProfileTicketing">
+                  <option value="">Prefiro não indicar</option>
+                  <option value="sim">Sim</option>
+                  <option value="nao">Não</option>
+                </select>
+              </label>
+              <label>
+                Terias interesse em vender bilhetes diretamente na Cultur'All?
+                <select id="organizerProfileInterest">
+                  <option value="">Prefiro não indicar</option>
+                  <option value="sim">Sim</option>
+                  <option value="talvez">Talvez</option>
+                  <option value="nao">Não</option>
+                </select>
+              </label>
+              <div class="organizer-create-actions">
+                <button class="organizer-create-submit" type="submit">Guardar perfil</button>
+              </div>
+              <p class="organizer-create-message" id="organizerProfileMessage" role="status" aria-live="polite"></p>
+            </form>
+          </details>
           <section class="organizer-create-panel" id="organizerCreatePanel" hidden>
             <div class="organizer-create-head">
               <div>
@@ -3473,10 +3665,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
               </fieldset>
 
-              <label>
-                Localização
-                <input id="organizerEventLocation" type="text" placeholder="Ex.: Casa da Música, Porto" required />
-              </label>
+              <fieldset class="organizer-location-field">
+                <legend>Localização</legend>
+                <label>
+                  Local / morada
+                  <input id="organizerEventLocation" type="text" maxlength="150" placeholder="Ex.: Casa da Música, Av. da Boavista" />
+                </label>
+                <label>
+                  Cidade
+                  <input id="organizerEventCity" type="text" maxlength="100" placeholder="Ex.: Porto" required />
+                </label>
+                <label>
+                  Distrito
+                  <select id="organizerEventDistrict" required>
+                    <option value="">Escolhe o distrito</option>
+                    ${districtOptionList.map((district) => `<option value="${esc(district)}">${esc(district)}</option>`).join('')}
+                  </select>
+                </label>
+              </fieldset>
 
               <label>
                 Preço
@@ -3505,7 +3711,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
               <label>
                 Link para bilhetes
-                <input id="organizerEventTicketUrl" type="url" placeholder="https://..." required />
+                <input id="organizerEventTicketUrl" type="url" maxlength="2048" placeholder="https://..." required />
               </label>
 
               <fieldset class="organizer-visibility-field">
@@ -3599,6 +3805,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const organizerEventRecurringTime = document.getElementById('organizerEventRecurringTime');
       const organizerRecurringTimeField = document.getElementById('organizerRecurringTimeField');
       const organizerEventLocation = document.getElementById('organizerEventLocation');
+      const organizerEventCity = document.getElementById('organizerEventCity');
+      const organizerEventDistrict = document.getElementById('organizerEventDistrict');
       const organizerEventPriceValue = document.getElementById('organizerEventPriceValue');
       const organizerEventImages = document.getElementById('organizerEventImages');
       const organizerEventTicketUrl = document.getElementById('organizerEventTicketUrl');
@@ -3664,11 +3872,11 @@ document.addEventListener('DOMContentLoaded', () => {
           const isMain = image.id === organizerMainImageId;
           return `
             <figure class="organizer-image-card${isMain ? ' is-main' : ''}">
-              <img src="${image.dataUrl}" alt="${image.name}" />
+              <img src="${esc(image.dataUrl)}" alt="${esc(image.name)}" />
               ${isMain ? '<span class="organizer-image-badge">Principal</span>' : ''}
               <div class="organizer-image-actions">
-                <button type="button" data-organizer-image-main="${image.id}" ${isMain ? 'disabled' : ''}>${isMain ? 'Imagem principal' : 'Definir como principal'}</button>
-                <button type="button" class="remove" data-organizer-image-remove="${image.id}" aria-label="Remover imagem ${image.name}">×</button>
+                <button type="button" data-organizer-image-main="${esc(image.id)}" ${isMain ? 'disabled' : ''}>${isMain ? 'Imagem principal' : 'Definir como principal'}</button>
+                <button type="button" class="remove" data-organizer-image-remove="${esc(image.id)}" aria-label="Remover imagem ${esc(image.name)}">×</button>
               </div>
             </figure>
           `;
@@ -3781,6 +3989,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (tabName === 'dashboard' && !organizerDashboardMounted) {
           organizerDashboardMounted = true;
           mountObservatory(profileRoot.querySelector('[data-organizer-pane="dashboard"] [data-observatory]'));
+          mountAnalytics(profileRoot.querySelector('[data-organizer-pane="dashboard"] [data-analytics]'), 'organizador');
         }
       };
 
@@ -3959,7 +4168,7 @@ document.addEventListener('DOMContentLoaded', () => {
             organizerEventDateType.value = 'recurring';
             organizerRecurringField.hidden = false;
             organizerRecurringField.classList.remove('is-hidden');
-            organizerEventRecurringTime.value = eventObj.recurringPattern || '20:00';
+            organizerEventRecurringTime.value = (new Date(eventObj.eventDate)).toTimeString().slice(0, 5) || '20:00';
             organizerCreateForm.querySelectorAll('input[name="organizerRecurringDays"]')?.forEach((input) => {
               input.checked = (eventObj.recurringDays ?? '').split(',').includes(input.value);
             });
@@ -3976,7 +4185,10 @@ document.addEventListener('DOMContentLoaded', () => {
               }
             }
           }
-          organizerEventLocation.value = eventObj.location ?? '';
+          organizerEventLocation.value = eventObj.street ?? '';
+          organizerEventCity.value = eventObj.city ?? '';
+          organizerEventDistrict.value = districtOptionList.includes(eventObj.district) ? eventObj.district : '';
+          organizerEventDescription.value = eventObj.description ?? '';
           organizerEventPriceType.value = eventObj.priceType ?? 'Pago';
           organizerEventPriceValue.value = eventObj.price ?? '';
           organizerEventTicketUrl.value = eventObj.ticketUrl ?? '';
@@ -3987,7 +4199,6 @@ document.addEventListener('DOMContentLoaded', () => {
           } else {
             setOrganizerVisibility('publish');
           }
-          // Não preencher descrição ao editar — descrição apenas ao criar um novo evento
           toggleOrganizerCreatePanel(true);
           updateOrganizerCreateVisibility();
           if (organizerImageHint) {
@@ -4009,9 +4220,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             return;
           }
-          const location = organizerEventLocation?.value.trim() ?? '';
+          const street = organizerEventLocation?.value.trim() ?? '';
+          const city = organizerEventCity?.value.trim() ?? '';
+          const district = organizerEventDistrict?.value ?? '';
           const priceType = organizerEventPriceType?.value ?? 'Gratuito';
-          const ticketUrl = organizerEventTicketUrl?.value.trim() ?? '';
+          const ticketUrl = priceType === 'Pago' ? (organizerEventTicketUrl?.value.trim() ?? '') : '';
           const selectedRecurringDays = Array.from(document.querySelectorAll('input[name="organizerRecurringDays"]'))
             .filter((input) => input.checked)
             .map((input) => input.value);
@@ -4031,11 +4244,25 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
           }
 
-          if (!title || !location || (isPaid && !ticketUrl)) {
+          if (!title || !city || !district || (isPaid && !ticketUrl)) {
             if (organizerCreateMessage) {
               organizerCreateMessage.textContent = isPaid
-                ? 'Preenche o título, a localização e o link de bilhetes.'
-                : 'Preenche o título e a localização.';
+                ? 'Preenche o título, a cidade, o distrito e o link de bilhetes.'
+                : 'Preenche o título, a cidade e o distrito.';
+            }
+            return;
+          }
+
+          if (isPaid && !(Number(organizerEventPriceValue?.value) > 0)) {
+            if (organizerCreateMessage) {
+              organizerCreateMessage.textContent = 'Indica o valor do bilhete (maior que 0) ou escolhe "Gratuito".';
+            }
+            return;
+          }
+
+          if (isPaid && !/^https?:\/\//i.test(ticketUrl)) {
+            if (organizerCreateMessage) {
+              organizerCreateMessage.textContent = 'O link de bilhetes tem de começar por http:// ou https://.';
             }
             return;
           }
@@ -4128,14 +4355,15 @@ document.addEventListener('DOMContentLoaded', () => {
                   action: 'update',
                   eventId: Number(editingOrganizerEventId),
                   title,
+                  description,
                   startDate: formatApiDateTime(eventDate),
                   endDate: endDatePayload,
                   price: priceType === 'Pago' ? Number(organizerEventPriceValue?.value || 0) : 0,
                   ticketUrl,
                   category,
-                  locationStreet: location,
-                  locationCity: getDistrictKey(location) ?? 'Lisboa',
-                  locationDistrict: getDistrictKey(location) ?? 'Lisboa',
+                  locationStreet: street,
+                  locationCity: city,
+                  locationDistrict: district,
                   isRecurring,
                   recurringPattern: isRecurring ? 'semanal' : '',
                   recurringDays: isRecurring ? recurringDays.join(',') : '',
@@ -4155,9 +4383,9 @@ document.addEventListener('DOMContentLoaded', () => {
                   price: priceType === 'Pago' ? Number(organizerEventPriceValue?.value || 0) : 0,
                   ticketUrl,
                   category,
-                  locationStreet: location,
-                  locationCity: getDistrictKey(location) ?? 'Lisboa',
-                  locationDistrict: getDistrictKey(location) ?? 'Lisboa',
+                  locationStreet: street,
+                  locationCity: city,
+                  locationDistrict: district,
                   isRecurring,
                   recurringPattern: isRecurring ? 'semanal' : '',
                   recurringDays: isRecurring ? recurringDays.join(',') : '',
@@ -4207,6 +4435,57 @@ document.addEventListener('DOMContentLoaded', () => {
           await refreshOrganizerEvents();
         });
       }
+
+      // ---- Perfil da entidade (apoia a análise de viabilidade da bilheteira integrada) ----
+      const organizerProfileForm = document.getElementById('organizerProfileForm');
+      const organizerProfileType = document.getElementById('organizerProfileType');
+      const organizerProfileCouncil = document.getElementById('organizerProfileCouncil');
+      const organizerProfileTicketing = document.getElementById('organizerProfileTicketing');
+      const organizerProfileInterest = document.getElementById('organizerProfileInterest');
+      const organizerProfileMessage = document.getElementById('organizerProfileMessage');
+      const organizerProfileCard = document.getElementById('organizerProfileCard');
+      const organizerProfileSummary = document.getElementById('organizerProfileSummary');
+
+      const fillOrganizerProfile = (profile) => {
+        organizerProfileType.value = profile.type ?? '';
+        organizerProfileCouncil.value = profile.council ?? '';
+        organizerProfileTicketing.value = profile.hasTicketing ?? '';
+        organizerProfileInterest.value = profile.interest ?? '';
+        const complete = Boolean(profile.type && profile.hasTicketing && profile.interest);
+        if (organizerProfileSummary) {
+          organizerProfileSummary.textContent = complete ? 'Perfil preenchido. Obrigado!' : 'Ajuda-nos a perceber como vendes bilhetes (2 minutos).';
+        }
+        organizerProfileCard?.classList.toggle('is-complete', complete);
+      };
+
+      void requestJson('/api/organizer/profile').then((response) => {
+        if (response?.profile) {
+          fillOrganizerProfile(response.profile);
+        }
+      }).catch(() => {
+        // Sem perfil carregado, o formulário fica em branco e pode ser preenchido na mesma.
+      });
+
+      organizerProfileForm?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        try {
+          const response = await requestJson('/api/organizer/profile', {
+            method: 'PATCH',
+            body: JSON.stringify({
+              type: organizerProfileType.value,
+              council: organizerProfileCouncil.value.trim(),
+              hasTicketing: organizerProfileTicketing.value,
+              interest: organizerProfileInterest.value
+            })
+          });
+          if (response?.profile) {
+            fillOrganizerProfile(response.profile);
+          }
+          organizerProfileMessage.textContent = 'Perfil guardado.';
+        } catch (error) {
+          organizerProfileMessage.textContent = error instanceof Error && error.message ? error.message : 'Não foi possível guardar o perfil.';
+        }
+      });
 
       updateOrganizerCreateVisibility();
       void refreshOrganizerEvents();
