@@ -787,7 +787,11 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   const updateFavoritesBadge = () => {
-    const count = getFavoriteIds().length;
+    const favoriteIds = getFavoriteIds();
+    // Favoritos de eventos que já passaram saem da contagem (quando a lista de eventos já está carregada).
+    const count = serverEventsState.loaded
+      ? favoriteIds.filter((favoriteId) => getUpcomingEvents().some((event) => event.id === favoriteId)).length
+      : favoriteIds.length;
     document.querySelectorAll('.favorites-btn').forEach((button) => {
       let badge = button.querySelector('.favorites-count');
       if (!badge) {
@@ -1136,6 +1140,150 @@ document.addEventListener('DOMContentLoaded', () => {
     void refresh();
   };
 
+  // Sino de notificações das contas de utilizador (favoritos que estão perto) e de organizador (estado dos seus eventos).
+  const ensureUserBell = (rootDocument = document, session = getSession()) => {
+    const actions = rootDocument.querySelector('.topbar-actions');
+    if (!actions || actions.querySelector('.admin-bell') || !['lambda', 'organizador'].includes(session?.accountType)) {
+      return;
+    }
+
+    const isOrganizer = session.accountType === 'organizador';
+    const bell = rootDocument.createElement('div');
+    bell.className = 'admin-bell user-bell';
+    bell.innerHTML = `
+      <button class="admin-bell-btn" type="button" aria-label="Notificações" aria-haspopup="true" aria-expanded="false">
+        <svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6.5 2 6.5H4S6 14 6 9Z"></path><path d="M10 19a2 2 0 0 0 4 0"></path></svg>
+        <span class="admin-bell-badge" hidden>0</span>
+      </button>
+      <div class="admin-bell-menu" role="menu" hidden></div>
+    `;
+    actions.prepend(bell);
+
+    const button = bell.querySelector('.admin-bell-btn');
+    const badge = bell.querySelector('.admin-bell-badge');
+    const menu = bell.querySelector('.admin-bell-menu');
+    const storageKey = `culturall.bell.seen.${session.email || session.name || session.accountType}`;
+    // Estados que só informam (à espera de aprovação) não contam como novidade.
+    const silentKinds = ['evento-pendente', 'alteracao-pendente'];
+    let currentItems = [];
+
+    const readSeen = () => {
+      try {
+        return new Set(JSON.parse(window.localStorage.getItem(storageKey) || '[]'));
+      } catch {
+        return new Set();
+      }
+    };
+
+    const writeSeen = (keys) => {
+      try {
+        window.localStorage.setItem(storageKey, JSON.stringify([...keys]));
+      } catch {
+        // Sem armazenamento: o aviso volta a aparecer na próxima visita.
+      }
+    };
+
+    const favoriteTiming = (item) => {
+      const start = new Date(item.start);
+      if (Number.isNaN(start.getTime())) {
+        return 'Em breve';
+      }
+
+      const time = start.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+      if (start.getTime() <= Date.now()) {
+        return 'A decorrer agora';
+      }
+
+      const days = Math.round((new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime() - new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime()) / 86400000);
+      return days <= 0 ? `Hoje às ${time}` : days === 1 ? `Amanhã às ${time}` : `Daqui a ${days} dias · ${time}`;
+    };
+
+    const describe = (item) => {
+      const link = `event.html?id=${encodeURIComponent(item.id)}&src=notificacao`;
+      switch (item.kind) {
+        case 'favorito':
+          return { href: link, head: favoriteTiming(item), text: `${item.title}${item.city ? ` · ${item.city}` : ''}` };
+        case 'evento-pendente':
+          return { href: link, head: 'À espera de aprovação', text: item.title };
+        case 'evento-aprovado':
+          return { href: link, head: 'Evento aprovado', text: item.title };
+        case 'evento-recusado':
+          return { href: link, head: 'Evento recusado', text: `${item.title}${item.reason ? ` · ${item.reason}` : ''}` };
+        case 'alteracao-pendente':
+          return { href: link, head: 'Alteração à espera de aprovação', text: item.title };
+        case 'alteracao-recusada':
+          return { href: link, head: 'Alteração recusada', text: `${item.title}${item.reason ? ` · ${item.reason}` : ''}` };
+        default:
+          return { href: 'profile.html', head: item.status === 'pendente' ? 'Conta à espera de validação' : 'Conta de organizador', text: item.status === 'pendente' ? 'A equipa ainda está a validar o teu perfil.' : `Estado: ${item.status}` };
+      }
+    };
+
+    const render = (items) => {
+      currentItems = items;
+      const seen = readSeen();
+      const fresh = items.filter((item) => !seen.has(item.key) && !silentKinds.includes(item.kind));
+      badge.hidden = fresh.length === 0;
+      badge.textContent = fresh.length > 99 ? '99+' : String(fresh.length);
+      button.setAttribute('aria-label', fresh.length ? `Notificações: ${fresh.length} novas` : 'Notificações');
+
+      if (!items.length) {
+        menu.innerHTML = `<p class="admin-bell-empty">${isOrganizer ? 'Sem novidades sobre os teus eventos.' : 'Nenhum favorito a acontecer nos próximos 7 dias.'}</p>`;
+        return;
+      }
+
+      menu.innerHTML = `<p class="admin-bell-title">${isOrganizer ? 'Os teus eventos' : 'Favoritos a chegar'}</p>${items.slice(0, 8).map((item) => {
+        const info = describe(item);
+        const isNew = !seen.has(item.key) && !silentKinds.includes(item.kind);
+        return `<a role="menuitem" class="admin-bell-item${isNew ? ' is-new' : ''}" href="${info.href}"><strong>${esc(info.head)}</strong><span>${esc(info.text)}</span></a>`;
+      }).join('')}${items.length > 8 ? `<a role="menuitem" class="admin-bell-more" href="${isOrganizer ? 'profile.html' : 'favorites.html'}">Ver todos (${items.length})</a>` : ''}`;
+    };
+
+    const refresh = async () => {
+      try {
+        const response = await requestJson('/api/notifications');
+        render(Array.isArray(response.items) ? response.items : []);
+      } catch {
+        // Sem rede: o sino fica como está.
+      }
+    };
+
+    const setOpen = (open) => {
+      menu.hidden = !open;
+      button.setAttribute('aria-expanded', String(open));
+    };
+
+    button.addEventListener('click', (clickEvent) => {
+      clickEvent.stopPropagation();
+      const willOpen = menu.hidden;
+      setOpen(willOpen);
+      if (willOpen) {
+        void refresh().then(() => {
+          // Ao abrir, o que estava novo passa a visto (o realce só desaparece na próxima abertura).
+          writeSeen(new Set(currentItems.map((item) => item.key)));
+          badge.hidden = true;
+        });
+      }
+    });
+    rootDocument.addEventListener('click', (clickEvent) => {
+      if (!bell.contains(clickEvent.target)) {
+        setOpen(false);
+      }
+    });
+    rootDocument.addEventListener('keydown', (keyEvent) => {
+      if (keyEvent.key === 'Escape') {
+        setOpen(false);
+      }
+    });
+    window.setInterval(() => {
+      if (!rootDocument.hidden && menu.hidden) {
+        void refresh();
+      }
+    }, 60000);
+
+    menu.innerHTML = '<p class="admin-bell-empty">A carregar…</p>';
+    void refresh();
+  };
+
   const syncLoginHeaderState = (rootDocument = document) => {
     const session = getSession();
     const loginToggleBtn = rootDocument.getElementById('loginToggleBtn');
@@ -1144,6 +1292,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // O sino do administrador aparece em todas as páginas com barra de topo (a do perfil tem ids próprios).
     if (session?.accountType === 'admin') {
       ensureAdminBell(rootDocument);
+    }
+
+    if (session?.accountType === 'lambda' || session?.accountType === 'organizador') {
+      ensureUserBell(rootDocument, session);
     }
 
     if (!loginToggleBtn || !accountChip) {

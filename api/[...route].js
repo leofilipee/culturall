@@ -1145,7 +1145,7 @@ async function handler(req, res) {
       if (req.method === 'GET') return json(res, 200, { ok: true, favorites: [] });
       return json(res, 403, { ok: false, message: 'Este tipo de conta não tem eventos favoritos.' });
     }
-    if (req.method === 'GET') { const [rows] = await db.query('SELECT favidevento FROM favorito WHERE favidutilizador=? ORDER BY idfavorito DESC', [user.id]); return json(res, 200, { ok: true, favorites: rows.map((row) => Number(row.favidevento)) }); }
+    if (req.method === 'GET') { const [rows] = await db.query(`SELECT f.favidevento FROM favorito f JOIN evento e ON e.idevento=f.favidevento WHERE f.favidutilizador=? AND NOT ${ENDED_SQL} ORDER BY f.idfavorito DESC`, [user.id, lisbonTimestamp()]); return json(res, 200, { ok: true, favorites: rows.map((row) => Number(row.favidevento)) }); }
     const eventId = Number(body.eventId); if (!eventId) return json(res, 422, { ok: false, message: 'Evento inválido.' });
     const interaction = (type) => recordInteractionSafe(db, req, { type, eventId, user, sessionId: body.sessionId, source: body.source });
     if (req.method === 'DELETE') {
@@ -1409,6 +1409,40 @@ async function handler(req, res) {
       changes: changes.map((row) => ({ id: Number(row.id), title: row.title, organizer: row.organizer, at: row.at })),
       organizers: organizers.map((row) => ({ id: Number(row.id), name: row.name, email: row.email, at: row.at }))
     });
+  }
+  // Sino de notificações das restantes contas com sessão:
+  // organizador (estado dos seus eventos) e utilizador (favoritos que estão perto de acontecer).
+  if (route === 'notifications' && req.method === 'GET') {
+    const actor = requireUser(req, res); if (!actor) return;
+    const items = [];
+    if (actor.accountType === 'lambda') {
+      const [rows] = await db.query(`SELECT e.idevento AS id, e.evtitulo AS title, DATE_FORMAT(e.evdatainicio, '%Y-%m-%dT%H:%i:%s') AS start, l.loccidade AS city
+        FROM favorito f JOIN evento e ON e.idevento=f.favidevento LEFT JOIN localizacao l ON l.idlocalizacao=e.evidlocalizacao
+        WHERE f.favidutilizador=? AND e.evestado IN ('publicado','ativo') AND e.evrecorrente=0 AND NOT ${ENDED_SQL} AND e.evdatainicio <= DATE_ADD(?, INTERVAL 7 DAY)
+        ORDER BY e.evdatainicio ASC LIMIT 20`, [actor.id, lisbonTimestamp(), lisbonTimestamp()]);
+      for (const row of rows) items.push({ key: `fav:${row.id}`, kind: 'favorito', id: Number(row.id), title: row.title, city: row.city || '', start: row.start });
+      return json(res, 200, { ok: true, role: 'lambda', items });
+    }
+    if (actor.accountType === 'organizador') {
+      const [orgs] = await db.query('SELECT idorganizador, orgestado FROM organizador WHERE orgidutilizador=? LIMIT 1', [actor.id]);
+      if (!orgs[0]) return json(res, 200, { ok: true, role: 'organizador', items });
+      const organizerId = Number(orgs[0].idorganizador);
+      if (orgs[0].orgestado && orgs[0].orgestado !== 'aprovado') {
+        items.push({ key: `conta:${orgs[0].orgestado}`, kind: 'conta', title: 'A tua conta de organizador', status: orgs[0].orgestado });
+      }
+      const [pending] = await db.query("SELECT idevento AS id, evtitulo AS title FROM evento WHERE evidorganizador=? AND evestado='pendente' ORDER BY evdatasubmissao DESC LIMIT 20", [organizerId]);
+      for (const row of pending) items.push({ key: `pendente:${row.id}`, kind: 'evento-pendente', id: Number(row.id), title: row.title });
+      const [rejected] = await db.query("SELECT idevento AS id, evtitulo AS title, evmotivorecusa AS reason FROM evento WHERE evidorganizador=? AND evestado='recusado' ORDER BY idevento DESC LIMIT 20", [organizerId]);
+      for (const row of rejected) items.push({ key: `recusado:${row.id}`, kind: 'evento-recusado', id: Number(row.id), title: row.title, reason: row.reason || '' });
+      const [approved] = await db.query(`SELECT e.idevento AS id, e.evtitulo AS title, e.evdataaprovacao AS at FROM evento e WHERE e.evidorganizador=? AND e.evestado IN ('publicado','ativo') AND e.evdataaprovacao >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 7 DAY) AND NOT ${ENDED_SQL} ORDER BY e.evdataaprovacao DESC LIMIT 20`, [organizerId, lisbonTimestamp()]);
+      for (const row of approved) items.push({ key: `aprovado:${row.id}:${new Date(row.at).getTime()}`, kind: 'evento-aprovado', id: Number(row.id), title: row.title });
+      const [changes] = await db.query("SELECT e.idevento AS id, e.evtitulo AS title, al.almotivo AS reason FROM eventoalteracao al JOIN evento e ON e.idevento=al.alidevento WHERE e.evidorganizador=? ORDER BY al.aldata DESC LIMIT 20", [organizerId]);
+      for (const row of changes) items.push(row.reason
+        ? { key: `alteracao-recusada:${row.id}`, kind: 'alteracao-recusada', id: Number(row.id), title: row.title, reason: row.reason }
+        : { key: `alteracao-pendente:${row.id}`, kind: 'alteracao-pendente', id: Number(row.id), title: row.title });
+      return json(res, 200, { ok: true, role: 'organizador', items });
+    }
+    return json(res, 200, { ok: true, role: actor.accountType, items });
   }
   return json(res, 404, { ok: false, message: 'Endpoint não encontrado.' });
 }

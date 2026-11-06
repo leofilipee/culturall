@@ -190,19 +190,65 @@ document.addEventListener('DOMContentLoaded', () => {
       return box;
     };
 
-    document.addEventListener('input', (event) => {
+    // Lista de eventos futuros, pedida uma vez (estas páginas não a carregam toda).
+    let eventsPromise = null;
+    const loadEvents = () => {
+      if (!eventsPromise) {
+        eventsPromise = fetch('/api/events?status=published', { credentials: 'same-origin' })
+          .then((response) => (response.ok ? response.json() : { events: [] }))
+          .then((data) => (Array.isArray(data.events) ? data.events : []))
+          .then((events) => {
+            const now = Date.now();
+            const today = new Date().toLocaleDateString('sv-SE');
+            return events.filter((item) => {
+              if (item.isRecurring) {
+                return true;
+              }
+
+              const end = item.endDate ? new Date(item.endDate).getTime() : NaN;
+              return Number.isNaN(end) ? new Date(item.startDate || item.eventDate).toLocaleDateString('sv-SE') >= today : end >= now;
+            });
+          })
+          .catch(() => []);
+      }
+
+      return eventsPromise;
+    };
+
+    document.addEventListener('input', async (event) => {
       if (!isSearchInput(event.target)) {
         return;
       }
 
-      const box = boxFor(event.target);
-      const query = event.target.value.trim();
+      const input = event.target;
+      const box = boxFor(input);
+      const query = input.value.trim();
       if (!query) {
         box.hidden = true;
         return;
       }
 
-      box.innerHTML = `<a class="suggestion suggestion-search" href="${searchUrl(query)}"><span><strong>Pesquisar “${escapeHtml(query)}”</strong><small>Ver resultados na página inicial</small></span></a>`;
+      const needle = query.toLowerCase();
+      const events = await loadEvents();
+      if (input.value.trim() !== query) {
+        return; // a pesquisa mudou entretanto
+      }
+
+      const matches = events
+        .filter((item) => [item.title, item.category, item.city, item.location].join(' ').toLowerCase().includes(needle))
+        .sort((a, b) => Number(b.views || 0) - Number(a.views || 0))
+        .slice(0, 5);
+
+      box.innerHTML = (matches.length ? '<p class="suggestion-heading">Sugestões</p>' : '')
+        + matches.map((item) => `
+          <a class="suggestion" role="option" href="event.html?id=${encodeURIComponent(item.id)}&src=pesquisa">
+            ${item.image ? `<img src="${escapeHtml(item.image)}" alt="" />` : ''}
+            <span>
+              <strong>${escapeHtml(item.title)}</strong>
+              <small>${categoryIcons[item.category] ?? ''} ${escapeHtml(item.category)} · ${escapeHtml(item.dateLabel || '')} · ${escapeHtml(item.city || item.location || '')}</small>
+            </span>
+          </a>`).join('')
+        + `<a class="suggestion suggestion-search" href="${searchUrl(query)}"><span><strong>Ver todos os resultados para “${escapeHtml(query)}”</strong><small>${matches.length ? 'Abrir a lista completa' : 'Nenhuma sugestão direta, procurar na página inicial'}</small></span></a>`;
       box.hidden = false;
     });
 

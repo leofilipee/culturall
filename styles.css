@@ -7219,3 +7219,9 @@ body.auth-mode .content {
   letter-spacing: 0;
   text-transform: none;
 }
+
+/* Sino das contas de utilizador e organizador (reutiliza o do admin) */
+.admin-bell-item.is-new {
+  background: var(--brand-soft);
+  box-shadow: inset 3px 0 0 var(--brand);
+}
