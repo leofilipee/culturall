@@ -467,7 +467,13 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    const state = { sort: '', filters: {} };
+    const pageSize = 25;
+    const state = { sort: '', filters: {}, limit: pageSize };
+    const moreWrap = document.createElement('div');
+    moreWrap.className = 'load-more-wrap';
+    moreWrap.hidden = true;
+    moreWrap.innerHTML = '<button type="button" class="load-more-btn"></button>';
+    const moreButton = moreWrap.firstElementChild;
     let originalCounter = 0;
     let applying = false;
     const bar = document.createElement('div');
@@ -481,6 +487,7 @@ document.addEventListener('DOMContentLoaded', () => {
       <span class="list-count" role="status" aria-live="polite"></span>
     `;
     anchor.before(bar);
+    anchor.after(moreWrap);
     const sortSelect = bar.querySelector('[data-list-sort]');
     const resetButton = bar.querySelector('.list-controls-reset');
     const countEl = bar.querySelector('.list-count');
@@ -551,6 +558,22 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         ordered.forEach((item) => container.appendChild(item));
 
+        // Paginação: só os primeiros `state.limit` resultados ficam visíveis; "Ver mais" mostra os seguintes.
+        let shown = 0;
+        ordered.forEach((item) => {
+          if (item.classList.contains('list-hidden')) {
+            return;
+          }
+
+          shown += 1;
+          if (shown > state.limit) {
+            item.classList.add('list-hidden');
+          }
+        });
+        const remaining = Math.max(0, visible - state.limit);
+        moreWrap.hidden = remaining === 0;
+        moreButton.textContent = `Ver mais (${remaining} ${remaining === 1 ? 'restante' : 'restantes'})`;
+
         const filtered = Boolean(state.sort) || filters.some((filter) => state.filters[filter.id]);
         resetButton.hidden = !filtered;
         const nounFor = (count) => (count === 1 ? noun.replace(/s$/, '') : noun);
@@ -571,11 +594,17 @@ document.addEventListener('DOMContentLoaded', () => {
         state.filters[target.dataset.listFilter] = target.value;
       }
 
+      state.limit = pageSize;
+      apply();
+    });
+    moreButton.addEventListener('click', () => {
+      state.limit += pageSize;
       apply();
     });
     resetButton.addEventListener('click', () => {
       state.sort = '';
       state.filters = {};
+      state.limit = pageSize;
       if (sortSelect) {
         sortSelect.value = '';
       }
@@ -2183,6 +2212,11 @@ document.addEventListener('DOMContentLoaded', () => {
       return true;
     };
 
+    const LISTING_PAGE_SIZE = 24;
+    let visibleCount = LISTING_PAGE_SIZE;
+    let lastListSignature = '';
+    let loadMoreWrap = null;
+
     const renderCards = () => {
       const query = searchInput.value.trim().toLowerCase();
       const selectedCategory = categoryFilter?.value ?? 'Todos';
@@ -2236,11 +2270,40 @@ document.addEventListener('DOMContentLoaded', () => {
           ? (total === 1 ? 'próximo evento' : 'próximos eventos')
           : (total === 1 ? 'evento encontrado' : 'eventos encontrados');
       }
-      cardsGrid.innerHTML = upcomingEvents.map(buildEventCard).join('')
-        + (archivedEvents.length > 0
+      // Só desenha um bloco de cartões de cada vez (os filtros e o mapa continuam a usar a lista completa).
+      const paging = pageType !== 'favorites';
+      const signature = [query, selectedCategory, selectedDate, selectedLocation, selectedPrice, ownOnly, currentSort].join('|');
+      if (signature !== lastListSignature) {
+        lastListSignature = signature;
+        visibleCount = LISTING_PAGE_SIZE;
+      }
+
+      const shownUpcoming = paging ? upcomingEvents.slice(0, visibleCount) : upcomingEvents;
+      const shownArchived = paging ? archivedEvents.slice(0, Math.max(0, visibleCount - shownUpcoming.length)) : archivedEvents;
+      cardsGrid.innerHTML = shownUpcoming.map(buildEventCard).join('')
+        + (shownArchived.length > 0
           ? `<div class="cards-divider"><span>Já aconteceram</span><small>${archivedEvents.length} ${archivedEvents.length === 1 ? 'evento' : 'eventos'}</small></div>`
-            + archivedEvents.map(buildEventCard).join('')
+            + shownArchived.map(buildEventCard).join('')
           : '');
+
+      const remainingCards = upcomingEvents.length + archivedEvents.length - shownUpcoming.length - shownArchived.length;
+      if (paging) {
+        if (!loadMoreWrap) {
+          loadMoreWrap = document.createElement('div');
+          loadMoreWrap.className = 'load-more-wrap';
+          loadMoreWrap.innerHTML = '<button type="button" class="load-more-btn" data-load-more></button>';
+          cardsGrid.after(loadMoreWrap);
+          loadMoreWrap.addEventListener('click', (clickEvent) => {
+            if (clickEvent.target instanceof Element && clickEvent.target.closest('[data-load-more]')) {
+              visibleCount += LISTING_PAGE_SIZE;
+              renderCards();
+            }
+          });
+        }
+
+        loadMoreWrap.hidden = remainingCards <= 0;
+        loadMoreWrap.firstElementChild.textContent = `Ver mais eventos (${remainingCards} ${remainingCards === 1 ? 'restante' : 'restantes'})`;
+      }
 
       if (emptyState) {
         const isEmpty = upcomingEvents.length === 0 && archivedEvents.length === 0;

@@ -5551,3 +5551,32 @@ body.auth-mode .content {
 .text-btn[hidden] {
   display: none;
 }
+
+/* ---------- Paginação "Ver mais" ---------- */
+.load-more-wrap {
+  display: flex;
+  justify-content: center;
+  margin: 28px 0 12px;
+}
+
+.load-more-wrap[hidden] {
+  display: none;
+}
+
+.load-more-btn {
+  padding: 12px 26px;
+  border: 1px solid rgba(221, 90, 45, 0.35);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  color: #c4451f;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+
+.load-more-btn:hover {
+  background: #fff;
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px rgba(84, 57, 38, 0.12);
+}

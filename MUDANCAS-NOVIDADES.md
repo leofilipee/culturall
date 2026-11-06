@@ -150,3 +150,8 @@ Origem: `CulturAll-melhorado.zip` aplicado sobre o projeto online (Vercel + TiDB
 - **Ordenar e filtrar listas:** utilizadores, organizadores, eventos pendentes, pedidos de alteração, eventos publicados, eventos do organizador e favoritos. Nomes por ordem alfabética, datas por data, números por valor; filtros por categoria, estado, organizador. Botão "Limpar" e contagem de resultados.
 - **Ícones centrados** nos botões das listas e coluna de ações centrada.
 
+
+## Fase 6 — Desempenho das listas
+- Página inicial: desenha 24 cartões de cada vez, com botão "Ver mais eventos"; filtros, pesquisa, ordenação e mapa continuam a usar a lista completa.
+- Listas do administrador e do organizador (tabelas): mostram 25 linhas de cada vez, com botão "Ver mais".
+- A animação de entrada dos cartões só corre para os cartões desenhados (IntersectionObserver já existente).
