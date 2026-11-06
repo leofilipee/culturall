@@ -467,7 +467,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    const pageSize = 25;
+    const pageSize = 12;
     const state = { sort: '', filters: {}, limit: pageSize };
     const moreWrap = document.createElement('div');
     moreWrap.className = 'load-more-wrap';
@@ -2212,7 +2212,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return true;
     };
 
-    const LISTING_PAGE_SIZE = 24;
+    const LISTING_PAGE_SIZE = 12;
     let visibleCount = LISTING_PAGE_SIZE;
     let lastListSignature = '';
     let loadMoreWrap = null;

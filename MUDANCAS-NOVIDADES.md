@@ -152,6 +152,6 @@ Origem: `CulturAll-melhorado.zip` aplicado sobre o projeto online (Vercel + TiDB
 
 
 ## Fase 6 — Desempenho das listas
-- Página inicial: desenha 24 cartões de cada vez, com botão "Ver mais eventos"; filtros, pesquisa, ordenação e mapa continuam a usar a lista completa.
-- Listas do administrador e do organizador (tabelas): mostram 25 linhas de cada vez, com botão "Ver mais".
+- Página inicial: desenha 12 cartões de cada vez, com botão "Ver mais eventos"; filtros, pesquisa, ordenação e mapa continuam a usar a lista completa.
+- Listas do administrador e do organizador (tabelas): mostram 12 linhas de cada vez, com botão "Ver mais".
 - A animação de entrada dos cartões só corre para os cartões desenhados (IntersectionObserver já existente).
