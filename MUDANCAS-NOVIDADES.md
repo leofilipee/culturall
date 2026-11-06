@@ -155,3 +155,13 @@ Origem: `CulturAll-melhorado.zip` aplicado sobre o projeto online (Vercel + TiDB
 - Página inicial: desenha 12 cartões de cada vez, com botão "Ver mais eventos"; filtros, pesquisa, ordenação e mapa continuam a usar a lista completa.
 - Listas do administrador e do organizador (tabelas): mostram 12 linhas de cada vez, com botão "Ver mais".
 - A animação de entrada dos cartões só corre para os cartões desenhados (IntersectionObserver já existente).
+- Mapa: o Leaflet (~160 KB) só é descarregado quando se abre a vista "Mapa" pela primeira vez, em vez de em cada visita à página inicial.
+- Limpeza: removidas duas funções sem uso (`getUserDistrict`, `setRegisterPanelVisible`).
+
+## Fase 7 — Eventos terminados e "Arquivados"
+- Um evento acabou quando passa a data de fim (ou, sem data de fim, quando o dia do início já passou). Eventos periódicos nunca terminam.
+- Removido o filtro/opção "Passados", o chip "Já aconteceram" e a secção "Já aconteceram" da página inicial. Eventos terminados deixam de aparecer nas listas, nos destaques, na pesquisa, nos favoritos, no mapa e nos relacionados.
+- Novo "Arquivados": no separador de moderação do administrador (todos os eventos terminados) e no painel do organizador (só os seus).
+- Dados: eventos terminados deixam de somar visualizações e interações (servidor: `/api/track`, `/api/go` e favoritos; página do evento não regista visita). O que já estava registado continua nos gráficos.
+- Página de um evento terminado: nota "Este evento já terminou." e botões Ver Bilhetes, Favoritos, Calendário e Partilhar desativados (cinzento). `/api/go` já não redireciona para a bilheteira.
+- Mapa: sem botão "Ver mais" e com marcadores agrupados (markercluster, carregado só ao abrir o mapa).

@@ -168,7 +168,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const searchInput = document.getElementById('searchInput');
     const cardsGrid = document.getElementById('cardsGrid');
     const mapWrap = document.getElementById('eventsMapWrap');
-    let lastRendered = { events: [], archived: [] };
+    let lastRendered = { events: [] };
     let currentView = 'list';
 
     /* ---------- Chips de categoria e de data ---------- */
@@ -207,8 +207,7 @@ document.addEventListener('DOMContentLoaded', () => {
       { label: 'Hoje', type: 'date', value: 'Hoje' },
       { label: 'Esta semana', type: 'date', value: 'Esta semana' },
       { label: 'Este mês', type: 'date', value: 'Este mês' },
-      { label: 'Gratuitos', type: 'price', value: 'Gratuito' },
-      { label: 'Já aconteceram', type: 'date', value: 'Passados' }
+      { label: 'Gratuitos', type: 'price', value: 'Gratuito' }
     ];
 
     const buildDateChips = () => {
@@ -281,13 +280,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const pickFeatured = (events) => {
       const bridge = window.CulturAll;
-      const upcoming = events
+      return events
         .filter((event) => !bridge.isPastEvent(event))
-        .sort((a, b) => b.views - a.views);
-      const past = events
-        .filter((event) => bridge.isPastEvent(event))
-        .sort((a, b) => b.views - a.views);
-      return [...upcoming, ...past].slice(0, 5);
+        .sort((a, b) => b.views - a.views)
+        .slice(0, 5);
     };
 
     const goToSlide = (index) => {
@@ -338,17 +334,16 @@ document.addEventListener('DOMContentLoaded', () => {
       const bridge = window.CulturAll;
       featuredTrack.innerHTML = featured.map((event, index) => {
         const timing = bridge.getEventTiming(event);
-        const isPast = bridge.isPastEvent(event);
         const isFav = bridge.isFavorite(event.id);
         return `
-          <article class="featured-slide${isPast ? ' is-past' : ''}" role="group" aria-roledescription="destaque" aria-label="${index + 1} de ${featured.length}: ${escapeHtml(event.title)}">
+          <article class="featured-slide" role="group" aria-roledescription="destaque" aria-label="${index + 1} de ${featured.length}: ${escapeHtml(event.title)}">
             <img src="${event.image}" alt="" ${index === 0 ? '' : 'loading="lazy"'} />
             <div class="featured-overlay"></div>
             <div class="featured-content">
               <div class="featured-tags">
                 <span class="featured-tag">${categoryIcons[event.category] ?? ''} ${escapeHtml(event.category)}</span>
                 ${timing.label ? `<span class="event-timing ${timing.tone}">${timing.tone === 'live' ? '<i></i>' : ''}${timing.label}</span>` : ''}
-                ${index === 0 && !isPast ? '<span class="featured-tag hot">🔥 Mais procurado</span>' : ''}
+                ${index === 0 ? '<span class="featured-tag hot">🔥 Mais procurado</span>' : ''}
               </div>
               <h2>${escapeHtml(event.title)}</h2>
               <p class="featured-meta">
@@ -478,6 +473,45 @@ document.addEventListener('DOMContentLoaded', () => {
       return [base[0] + ((seed % 7) - 3) * 0.004, base[1] + ((seed % 5) - 2) * 0.005];
     };
 
+    let leafletPromise = null;
+    const loadLeaflet = () => {
+      if (window.L?.markerClusterGroup) {
+        return Promise.resolve();
+      }
+
+      if (!leafletPromise) {
+        const base = 'https://unpkg.com';
+        const addStyle = (href) => {
+          const link = document.createElement('link');
+          link.rel = 'stylesheet';
+          link.href = href;
+          link.crossOrigin = '';
+          document.head.appendChild(link);
+        };
+        const addScript = (src) => new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = src;
+          script.crossOrigin = '';
+          script.onload = () => resolve();
+          script.onerror = () => reject(new Error(src));
+          document.head.appendChild(script);
+        });
+
+        addStyle(`${base}/leaflet@1.9.4/dist/leaflet.css`);
+        addStyle(`${base}/leaflet.markercluster@1.5.3/dist/MarkerCluster.css`);
+        addStyle(`${base}/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css`);
+        // O markercluster precisa do Leaflet já carregado.
+        leafletPromise = addScript(`${base}/leaflet@1.9.4/dist/leaflet.js`)
+          .then(() => addScript(`${base}/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js`))
+          .catch((error) => {
+            leafletPromise = null;
+            throw error;
+          });
+      }
+
+      return leafletPromise;
+    };
+
     const renderMap = () => {
       if (!mapWrap) {
         return;
@@ -486,7 +520,14 @@ document.addEventListener('DOMContentLoaded', () => {
       const mapElement = document.getElementById('eventsMap');
       const legend = document.getElementById('mapLegend');
       if (typeof window.L === 'undefined') {
-        mapElement.innerHTML = '<p class="map-fallback">Não foi possível carregar o mapa. Verifica a ligação à internet.</p>';
+        // O Leaflet só é descarregado quando o mapa é aberto pela primeira vez.
+        mapElement.innerHTML = '<p class="map-fallback">A carregar o mapa…</p>';
+        loadLeaflet().then(() => {
+          mapElement.innerHTML = '';
+          renderMap();
+        }).catch(() => {
+          mapElement.innerHTML = '<p class="map-fallback">Não foi possível carregar o mapa. Verifica a ligação à internet.</p>';
+        });
         return;
       }
 
@@ -496,15 +537,15 @@ document.addEventListener('DOMContentLoaded', () => {
           maxZoom: 18,
           attribution: '&copy; contribuidores do <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         }).addTo(map);
-        markersLayer = window.L.layerGroup().addTo(map);
+        // Marcadores agrupados (markercluster) para o mapa continuar fluido com muitos eventos.
+        markersLayer = (window.L.markerClusterGroup ? window.L.markerClusterGroup({ chunkedLoading: true, maxClusterRadius: 50, showCoverageOnHover: false }) : window.L.layerGroup()).addTo(map);
       }
 
       setTimeout(() => map.invalidateSize(), 60);
       markersLayer.clearLayers();
 
       const bridge = window.CulturAll;
-      // Só eventos que ainda vão acontecer (ou estão a decorrer) aparecem no mapa.
-      const events = lastRendered.events.filter((event) => !bridge.isPastEvent(event));
+      const events = lastRendered.events;
       const bounds = [];
       const categoriesShown = new Set();
 
@@ -567,6 +608,9 @@ document.addEventListener('DOMContentLoaded', () => {
         cardsGrid.hidden = view === 'map';
       }
 
+      // O mapa não é uma lista: o botão "Ver mais" só existe na vista de lista.
+      document.documentElement.dataset.listingView = view;
+
       if (view === 'map') {
         renderMap();
       }
@@ -597,17 +641,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const query = searchInput.value.trim().toLowerCase();
       const bridge = window.CulturAll;
-      const events = bridge.getEvents();
+      const events = bridge.getUpcomingEvents();
       let matches;
       let heading;
 
       if (!query) {
-        matches = events.filter((event) => !bridge.isPastEvent(event)).sort((a, b) => b.views - a.views).slice(0, 4);
+        matches = events.slice().sort((a, b) => b.views - a.views).slice(0, 4);
         heading = 'Em alta';
       } else {
         matches = events
           .filter((event) => [event.title, event.category, event.city, event.location].join(' ').toLowerCase().includes(query))
-          .sort((a, b) => Number(bridge.isPastEvent(a)) - Number(bridge.isPastEvent(b)) || b.views - a.views)
+          .sort((a, b) => b.views - a.views)
           .slice(0, 5);
         heading = matches.length ? 'Sugestões' : '';
       }
@@ -683,7 +727,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     whenBridgeReady((bridge) => {
-      const events = bridge.getEvents();
+      const events = bridge.getUpcomingEvents();
       buildCategoryChips(events);
       buildDateChips();
       buildFeatured(events);

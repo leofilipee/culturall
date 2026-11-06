@@ -690,6 +690,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const getVisibleEvents = () => getAllEvents().filter((event) => normalizePublicEventStatus(event.status) === 'active');
 
+  // Eventos que já terminaram deixam de aparecer nas listas públicas (ficam em "Arquivados" para o administrador e o organizador).
+  const getUpcomingEvents = () => getVisibleEvents().filter((event) => !isPastEvent(event));
+
   // O evento pertence ao organizador com sessão iniciada?
   const isOwnEvent = (event, session = getSession()) => Boolean(
     session?.accountType === 'organizador'
@@ -929,7 +932,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const isUpcomingEvent = (event) => getEventDateTime(event) >= Date.now();
 
-  const isPastEvent = (event) => !event.isRecurring && getEventDateTime(event) < Date.now();
+  // Um evento acabou quando passou a data de fim; sem data de fim, quando o dia do início já passou.
+  const isPastEvent = (event) => {
+    if (event.isRecurring) {
+      return false;
+    }
+
+    const end = event.endDate ? new Date(event.endDate).getTime() : NaN;
+    if (!Number.isNaN(end)) {
+      return end < Date.now();
+    }
+
+    return getEventDateKey(event) < getDateKey(new Date());
+  };
 
   const getDateBucketForDateTime = (dateTime, isRecurring = false) => {
     if (isRecurring) {
@@ -938,10 +953,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const eventDateKey = getDateKey(new Date(dateTime));
     const todayKey = getDateKey(new Date());
-
-    if (eventDateKey < todayKey) {
-      return 'Passados';
-    }
 
     if (eventDateKey === todayKey) {
       return 'Hoje';
@@ -1123,11 +1134,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const getListingEvents = () => {
     if (pageType === 'favorites') {
       return getFavoriteIds()
-        .map((favoriteId) => getVisibleEvents().find((event) => event.id === favoriteId))
+        .map((favoriteId) => getUpcomingEvents().find((event) => event.id === favoriteId))
         .filter(Boolean);
     }
 
-    return getVisibleEvents();
+    return getUpcomingEvents();
   };
 
   const getEventById = (eventId) => getAllEvents().find((event) => normalizeEventId(event.id) === normalizeEventId(eventId)) ?? null;
@@ -1201,7 +1212,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const timing = getEventTiming(event);
     const isFree = event.priceType === 'Gratuito';
     return `
-    <article class="event-card${isPastEvent(event) ? ' is-past' : ''}" style="--stagger:${Math.min(index, 8)}" tabindex="0" role="link" aria-label="Abrir evento ${esc(event.title)}" data-event-id="${esc(event.id)}" data-event-link="${esc(getEventDetailUrl(event.id))}" data-category="${esc(event.category)}" data-ts="${esc(String(new Date(event.eventDate).getTime() || ''))}" data-date="${esc(event.dateBucket)}" data-location="${esc(getEventDistrict(event))}" data-price="${esc(event.priceType)}" data-title="${esc(event.title.toLowerCase())}">
+    <article class="event-card" style="--stagger:${Math.min(index, 8)}" tabindex="0" role="link" aria-label="Abrir evento ${esc(event.title)}" data-event-id="${esc(event.id)}" data-event-link="${esc(getEventDetailUrl(event.id))}" data-category="${esc(event.category)}" data-ts="${esc(String(new Date(event.eventDate).getTime() || ''))}" data-date="${esc(event.dateBucket)}" data-location="${esc(getEventDistrict(event))}" data-price="${esc(event.priceType)}" data-title="${esc(event.title.toLowerCase())}">
       <div class="event-media">
         <div class="event-date-badge" aria-hidden="true"><strong>${timing.day}</strong><span>${timing.month}</span></div>
         <div class="event-media-actions">
@@ -1341,7 +1352,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const requestedSource = url.searchParams.get('src');
     const detailSource = knownSources.includes(requestedSource) ? requestedSource : 'direto';
     // As visitas do próprio organizador à sua página não contam para as estatísticas.
-    if (!isOwner && !isAdminViewer) {
+    // Eventos que já terminaram deixam de contar visitas e interações.
+    const eventEnded = isPastEvent(event);
+    if (!isOwner && !isAdminViewer && !eventEnded) {
       trackInteraction(event.id, 'visualizacao', detailSource);
     }
 
@@ -1354,7 +1367,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ? `/api/go?id=${encodeURIComponent(event.id)}&s=${encodeURIComponent(getTrackingSessionId())}&src=${encodeURIComponent(detailSource)}`
         : event.ticketUrl;
 
-    const relatedEvents = getVisibleEvents()
+    const relatedEvents = getUpcomingEvents()
       .filter((item) => item.id !== event.id)
       .filter((item) => item.category === event.category || getEventDistrict(item) === getEventDistrict(event))
       .slice(0, 3);
@@ -1510,14 +1523,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 <strong class="event-detail-price ${event.priceType === 'Gratuito' ? 'free' : ''}">${esc(event.priceLabel)}</strong>
               </div>
 
-              ${ticketHref ? `<a class="event-detail-action primary" id="eventDetailTicketBtn" href="${esc(ticketHref)}" target="_blank" rel="noopener noreferrer">Ver Bilhetes</a>` : ''}
-              ${roleCanFavorite(session) ? `<button class="event-detail-action secondary" id="eventDetailFavoriteBtn" type="button" data-event-id="${esc(event.id)}">${getFavoriteDetailLabel(event.id)}</button>` : ''}
+              ${eventEnded ? '<p class="event-ended-note" role="status">Este evento já terminou.</p>' : ''}
+              ${ticketHref ? (eventEnded
+                ? '<button class="event-detail-action primary" id="eventDetailTicketBtn" type="button" disabled aria-disabled="true">Ver Bilhetes</button>'
+                : `<a class="event-detail-action primary" id="eventDetailTicketBtn" href="${esc(ticketHref)}" target="_blank" rel="noopener noreferrer">Ver Bilhetes</a>`) : ''}
+              ${roleCanFavorite(session) ? `<button class="event-detail-action secondary" id="eventDetailFavoriteBtn" type="button" data-event-id="${esc(event.id)}"${eventEnded ? ' disabled aria-disabled="true"' : ''}>${getFavoriteDetailLabel(event.id)}</button>` : ''}
               <div class="event-detail-extra-actions">
-                <button class="event-detail-action ghost" id="eventDetailCalendarBtn" type="button">
+                <button class="event-detail-action ghost" id="eventDetailCalendarBtn" type="button"${eventEnded ? ' disabled aria-disabled="true"' : ''}>
                   <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="3"></rect><path d="M8 3v4"></path><path d="M16 3v4"></path><path d="M4 9h16"></path><path d="M12 12v5"></path><path d="M9.5 14.5h5"></path></svg>
                   Calendário
                 </button>
-                <button class="event-detail-action ghost share-btn" type="button" data-event-id="${esc(event.id)}">
+                <button class="event-detail-action ghost share-btn" type="button" data-event-id="${esc(event.id)}"${eventEnded ? ' disabled aria-disabled="true"' : ''}>
                   <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><path d="m8.6 13.5 6.8 4"></path><path d="m15.4 6.5-6.8 4"></path></svg>
                   Partilhar
                 </button>
@@ -1980,6 +1996,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const publishBridge = () => {
     window.CulturAll = {
       getEvents: () => getVisibleEvents(),
+      getUpcomingEvents,
       getEventDetailUrl,
       getEventDistrict,
       getEventTiming,
@@ -2075,8 +2092,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const getUserLocation = () => (getSession()?.location ?? '').trim().toLowerCase();
-
-    const getUserDistrict = () => getDistrictKey(getSession()?.location ?? '') ?? 'Outros';
 
     const getProximityScore = (event, userLocation) => {
       if (!userLocation) {
@@ -2185,10 +2200,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return eventDateKey === todayKey;
       }
 
-      if (selectedDate === 'Passados') {
-        return !event.isRecurring && eventDateKey < todayKey;
-      }
-
       if (selectedDate === 'Periódicos') {
         return Boolean(event.isRecurring);
       }
@@ -2228,13 +2239,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const userLocation = getUserLocation();
 
       const sourceEvents = getListingEvents();
-      // Na página inicial, com "Todos", os eventos passados aparecem no fim numa secção própria.
-      const showPastArchive = pageType === 'home' && selectedDate === 'Todos';
       const filtered = sourceEvents.filter((event) => {
-        if (pageType !== 'favorites' && selectedDate !== 'Passados' && !showPastArchive && isPastEvent(event)) {
-          return false;
-        }
-
         const matchesQuery = !query || [event.title, event.category, event.location, event.dateLabel, event.priceLabel].join(' ').toLowerCase().includes(query);
         const matchesCategory = selectedCategory === 'Todos' || event.category === selectedCategory;
         const matchesDate = matchesDateFilter(event, selectedDate);
@@ -2260,15 +2265,12 @@ document.addEventListener('DOMContentLoaded', () => {
         return secondEvent.views - firstEvent.views;
       });
 
-      const upcomingEvents = showPastArchive ? filtered.filter((event) => !isPastEvent(event)) : filtered;
-      const archivedEvents = showPastArchive ? filtered.filter((event) => isPastEvent(event)) : [];
+      const upcomingEvents = filtered;
 
       resultsCount.textContent = upcomingEvents.length;
       if (resultsLabel && pageType === 'home') {
         const total = upcomingEvents.length;
-        resultsLabel.textContent = showPastArchive
-          ? (total === 1 ? 'próximo evento' : 'próximos eventos')
-          : (total === 1 ? 'evento encontrado' : 'eventos encontrados');
+        resultsLabel.textContent = total === 1 ? 'evento encontrado' : 'eventos encontrados';
       }
       // Só desenha um bloco de cartões de cada vez (os filtros e o mapa continuam a usar a lista completa).
       const paging = pageType !== 'favorites';
@@ -2279,14 +2281,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       const shownUpcoming = paging ? upcomingEvents.slice(0, visibleCount) : upcomingEvents;
-      const shownArchived = paging ? archivedEvents.slice(0, Math.max(0, visibleCount - shownUpcoming.length)) : archivedEvents;
-      cardsGrid.innerHTML = shownUpcoming.map(buildEventCard).join('')
-        + (shownArchived.length > 0
-          ? `<div class="cards-divider"><span>Já aconteceram</span><small>${archivedEvents.length} ${archivedEvents.length === 1 ? 'evento' : 'eventos'}</small></div>`
-            + shownArchived.map(buildEventCard).join('')
-          : '');
+      cardsGrid.innerHTML = shownUpcoming.map(buildEventCard).join('');
 
-      const remainingCards = upcomingEvents.length + archivedEvents.length - shownUpcoming.length - shownArchived.length;
+      const remainingCards = upcomingEvents.length - shownUpcoming.length;
       if (paging) {
         if (!loadMoreWrap) {
           loadMoreWrap = document.createElement('div');
@@ -2306,8 +2303,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (emptyState) {
-        const isEmpty = upcomingEvents.length === 0 && archivedEvents.length === 0;
-        emptyState.hidden = !isEmpty;
+        emptyState.hidden = upcomingEvents.length > 0;
         emptyState.innerHTML = `
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="3"></rect><path d="M8 3v4"></path><path d="M16 3v4"></path><path d="M4 9h16"></path><path d="m10 13 4 4"></path><path d="m14 13-4 4"></path></svg>
           <strong>${page.empty}</strong>
@@ -2319,7 +2315,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       updateFavoritesBadge();
       document.dispatchEvent(new CustomEvent('culturall:cards-rendered', {
-        detail: { events: upcomingEvents, archived: archivedEvents }
+        detail: { events: upcomingEvents }
       }));
     };
 
@@ -2580,14 +2576,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       registerNameInput?.focus();
-    };
-
-    const setRegisterPanelVisible = (isVisible) => {
-      if (!registerPanel) {
-        return;
-      }
-
-      setAuthMode(isVisible ? 'register' : 'login');
     };
 
     const getSelectedRegisterAccountType = () => registerAccountTypeInputs.find((input) => input.checked)?.value ?? 'lambda';
@@ -3380,6 +3368,19 @@ document.addEventListener('DOMContentLoaded', () => {
                   </table>
                 </div>
               </div>
+
+              <div class="admin-section-card">
+                <h2>Arquivados</h2>
+                <p class="admin-section-hint">Eventos que já terminaram. Deixam de aparecer na plataforma e de somar visualizações, mas os dados que já tinham continuam nos gráficos.</p>
+                <div class="admin-table-wrap">
+                  <table class="admin-table">
+                    <thead>
+                      <tr><th>Título</th><th>Categoria</th><th>Data</th><th>Organizador</th><th>Estado</th><th>Ações</th></tr>
+                    </thead>
+                    <tbody data-admin-archived-events></tbody>
+                  </table>
+                </div>
+              </div>
             </section>
 
             <section class="admin-panel" data-admin-pane="organizers">
@@ -3510,6 +3511,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const adminEventActionReason = adminEventActionModal.querySelector('#adminEventActionReason');
       const adminPendingEventsContainer = profileRoot.querySelector('[data-admin-pending-events]');
       const adminPublishedEventsTableBody = profileRoot.querySelector('[data-admin-published-events]');
+      const adminArchivedEventsTableBody = profileRoot.querySelector('[data-admin-archived-events]');
       const adminOrganizerAvatar = adminOrganizerProfileModal.querySelector('#adminOrganizerAvatar');
       const adminOrganizerName = adminOrganizerProfileModal.querySelector('#adminOrganizerName');
       const adminOrganizerEmail = adminOrganizerProfileModal.querySelector('#adminOrganizerEmail');
@@ -3532,9 +3534,12 @@ document.addEventListener('DOMContentLoaded', () => {
       const getAdminEventById = (eventId) => adminEventsState.items.find((event) => String(event.id) === String(eventId)) ?? null;
       const getAdminOrganizerByEmail = (email) => adminOrganizers.find((organizer) => organizer.email === email) ?? null;
 
-      const getAdminPendingEvents = () => adminEventsState.items.filter((event) => normalizeAdminEventStatus(event.status) === 'pending');
+      // Eventos terminados saem das listas de gestão e ficam em "Arquivados".
+      const getAdminPendingEvents = () => adminEventsState.items.filter((event) => normalizeAdminEventStatus(event.status) === 'pending' && !isPastEvent(event));
 
-      const getAdminPublishedEvents = () => adminEventsState.items.filter((event) => ['active', 'hidden'].includes(normalizeAdminEventStatus(event.status)));
+      const getAdminPublishedEvents = () => adminEventsState.items.filter((event) => ['active', 'hidden'].includes(normalizeAdminEventStatus(event.status)) && !isPastEvent(event));
+
+      const getAdminArchivedEvents = () => adminEventsState.items.filter((event) => isPastEvent(event));
 
       const renderAdminModerationLists = () => {
         const eventDataAttrs = (event) => `data-title="${esc(event.title)}" data-category="${esc(event.category)}" data-organizer="${esc(event.organizerName ?? event.organizerEmail ?? '')}" data-date="${esc(String(new Date(event.startDate ?? event.eventDate ?? 0).getTime() || ''))}" data-submitted="${esc(String(new Date(event.submittedAt || 0).getTime() || ''))}"`;
@@ -3561,7 +3566,7 @@ document.addEventListener('DOMContentLoaded', () => {
             : '<div class="admin-empty-state">Não existem eventos pendentes de aprovação.</div>';
         }
 
-        const changeRequests = adminEventsState.items.filter((event) => event.hasPendingChange);
+        const changeRequests = adminEventsState.items.filter((event) => event.hasPendingChange && !isPastEvent(event));
         const changesCard = profileRoot.querySelector('[data-admin-changes-card]');
         const changesContainer = profileRoot.querySelector('[data-admin-change-requests]');
         if (changesCard && changesContainer) {
@@ -3613,6 +3618,30 @@ document.addEventListener('DOMContentLoaded', () => {
                 `;
               }).join('')
             : '<tr><td colspan="6"><div class="admin-empty-state">Não existem eventos publicados para gerir.</div></td></tr>';
+        }
+
+        if (adminArchivedEventsTableBody) {
+          const archivedEvents = getAdminArchivedEvents();
+          adminArchivedEventsTableBody.innerHTML = archivedEvents.length > 0
+            ? archivedEvents.map((event) => {
+                const status = normalizeAdminEventStatus(event.status);
+                return `
+                  <tr>
+                    <td>${esc(event.title)}</td>
+                    <td>${esc(event.category)}</td>
+                    <td>${esc(event.dateLabel ?? event.date ?? 'A definir')}${event.endDateLabel ? ' — ' + esc(event.endDateLabel) : ''}</td>
+                    <td>${esc(event.organizerName ?? event.organizerEmail ?? 'Organizador')}</td>
+                    <td><span class="admin-pill ${status === 'active' ? 'success' : 'warning'}">${normalizeAdminEventStatusLabel(status)}</span></td>
+                    <td>
+                      <div class="admin-actions-group">
+                        <a class="admin-icon-btn" aria-label="Ver página do evento" href="event.html?id=${encodeURIComponent(event.id)}&src=admin"><svg viewBox="0 0 24 24"><path d="M14 4h6v6"></path><path d="M20 4l-9 9"></path><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"></path></svg></a>
+                        <button type="button" class="admin-icon-btn danger" aria-label="Eliminar evento" data-admin-event-action="delete" data-admin-event-id="${event.id}"><svg viewBox="0 0 24 24"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M6 7l1 13h10l1-13"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg></button>
+                      </div>
+                    </td>
+                  </tr>
+                `;
+              }).join('')
+            : '<tr><td colspan="6"><div class="admin-empty-state">Ainda não há eventos arquivados.</div></td></tr>';
         }
       };
 
@@ -4065,6 +4094,10 @@ document.addEventListener('DOMContentLoaded', () => {
         { title: 0, category: 1, date: 2, organizer: 3, status: 4 },
         [...textSorts('title', 'Título'), ...dateSorts('date', 'Data do evento'), ...textSorts('organizer', 'Organizador')],
         [{ id: 'category', label: 'Categoria', key: 'category' }, { id: 'organizer', label: 'Organizador', key: 'organizer' }, { id: 'status', label: 'Estado', key: 'status' }], 'eventos');
+      tableListControls(profileRoot.querySelector('[data-admin-archived-events]')?.closest('table'),
+        { title: 0, category: 1, date: 2, organizer: 3, status: 4 },
+        [...textSorts('title', 'Título'), ...dateSorts('date', 'Data do evento'), ...textSorts('organizer', 'Organizador')],
+        [{ id: 'category', label: 'Categoria', key: 'category' }, { id: 'organizer', label: 'Organizador', key: 'organizer' }, { id: 'status', label: 'Estado', key: 'status' }], 'eventos');
       const reviewFields = {
         title: (item) => item.dataset.title ?? '', category: (item) => item.dataset.category ?? '', organizer: (item) => item.dataset.organizer ?? '',
         date: (item) => item.dataset.date ?? '', submitted: (item) => item.dataset.submitted ?? ''
@@ -4108,7 +4141,10 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
 
-        const createdEvents = getOrganizerCreatedEvents();
+        const allCreatedEvents = getOrganizerCreatedEvents();
+        // Eventos terminados saem desta lista e ficam em "Arquivados".
+        const createdEvents = allCreatedEvents.filter((event) => !isPastEvent(event));
+        const archivedEvents = allCreatedEvents.filter((event) => isPastEvent(event));
         const organizerTable = tableBody.closest('table');
         const organizerEmptyState = document.getElementById('organizerEmptyState');
         if (organizerTable) {
@@ -4118,7 +4154,7 @@ document.addEventListener('DOMContentLoaded', () => {
           organizerEmptyState.hidden = createdEvents.length > 0;
         }
 
-        tableBody.innerHTML = createdEvents.map((event) => `
+        const buildOrganizerRow = (event, archived = false) => `
           <tr>
             <td class="organizer-event-title">${esc(event.title)}</td>
             <td>${esc(event.category)}</td>
@@ -4135,9 +4171,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 <button type="button" class="icon-btn" data-organizer-event-id="${esc(event.id)}" data-organizer-event-action="view" aria-label="Ver evento">
                   <svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
                 </button>
-                <button type="button" class="icon-btn" data-organizer-event-id="${esc(event.id)}" data-organizer-event-action="edit" aria-label="Editar evento">
+                ${archived ? '' : `<button type="button" class="icon-btn" data-organizer-event-id="${esc(event.id)}" data-organizer-event-action="edit" aria-label="Editar evento">
                   <svg viewBox="0 0 24 24"><path d="M4 20h4l10-10a2.5 2.5 0 0 0-4-4L4 16v4Z"></path></svg>
-                </button>
+                </button>`}
                 ${event.status === 'pendente' ? `<button type="button" class="text-btn" data-organizer-event-id="${esc(event.id)}" data-organizer-event-action="cancel-request">Cancelar pedido de aprovação</button>` : ''}
                 ${event.hasPendingChange ? `<button type="button" class="text-btn" data-organizer-event-id="${esc(event.id)}" data-organizer-event-action="cancel-change">Cancelar pedido de alteração</button>` : ''}
                 ${event.changeRejectReason ? `<button type="button" class="text-btn" data-organizer-event-id="${esc(event.id)}" data-organizer-event-action="cancel-change">Dispensar aviso</button>` : ''}
@@ -4147,7 +4183,16 @@ document.addEventListener('DOMContentLoaded', () => {
               </div>
             </td>
           </tr>
-        `).join('');
+        `;
+
+        tableBody.innerHTML = createdEvents.map((event) => buildOrganizerRow(event)).join('');
+
+        const archivedPanel = document.getElementById('eventos-arquivados');
+        const archivedBody = document.getElementById('organizerArchivedBody');
+        if (archivedPanel && archivedBody) {
+          archivedPanel.hidden = archivedEvents.length === 0;
+          archivedBody.innerHTML = archivedEvents.map((event) => buildOrganizerRow(event, true)).join('');
+        }
       };
 
       const refreshOrganizerEvents = async () => {
@@ -4523,6 +4568,25 @@ document.addEventListener('DOMContentLoaded', () => {
               <strong>Não há eventos publicados.</strong>
               <button class="empty-state-btn" type="button" id="organizerEmptyAddBtn">Adicionar Evento</button>
             </div>
+          </div>
+
+          <div class="organizer-panel organizer-archive" id="eventos-arquivados" hidden>
+            <h2>Arquivados</h2>
+            <p class="admin-section-hint">Eventos teus que já terminaram. Deixam de aparecer na plataforma e de somar visualizações, mas os dados que já tinham continuam nos gráficos.</p>
+            <table class="organizer-table" aria-label="Eventos arquivados do organizador">
+              <thead>
+                <tr>
+                  <th>Evento</th>
+                  <th>Categoria</th>
+                  <th>Data</th>
+                  <th>Localização</th>
+                  <th>Estado</th>
+                  <th>Visualizações</th>
+                  <th>Ações</th>
+                </tr>
+              </thead>
+              <tbody id="organizerArchivedBody"></tbody>
+            </table>
           </div>
           </section>
         </div>
@@ -5297,6 +5361,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Ordenar e filtrar a lista de eventos do organizador.
       tableListControls(document.getElementById('organizerTableBody')?.closest('table'),
+        { title: 0, category: 1, date: 2, location: 3, status: 4, views: 5 },
+        [
+          { value: 'title-asc', label: 'Título (A–Z)', key: 'title', type: 'text', dir: 1 },
+          { value: 'title-desc', label: 'Título (Z–A)', key: 'title', type: 'text', dir: -1 },
+          { value: 'date-desc', label: 'Data (mais recente)', key: 'date', type: 'date', dir: -1 },
+          { value: 'date-asc', label: 'Data (mais antiga)', key: 'date', type: 'date', dir: 1 },
+          { value: 'views-desc', label: 'Visualizações (mais)', key: 'views', type: 'number', dir: -1 },
+          { value: 'views-asc', label: 'Visualizações (menos)', key: 'views', type: 'number', dir: 1 }
+        ],
+        [{ id: 'category', label: 'Categoria', key: 'category' }, { id: 'status', label: 'Estado', key: 'status' }], 'eventos');
+      tableListControls(document.getElementById('organizerArchivedBody')?.closest('table'),
         { title: 0, category: 1, date: 2, location: 3, status: 4, views: 5 },
         [
           { value: 'title-asc', label: 'Título (A–Z)', key: 'title', type: 'text', dir: 1 },

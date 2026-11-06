@@ -406,6 +406,10 @@ async function releaseScheduledEvents(connection) {
 /* ============================================================
  * Registo de interações
  * ============================================================ */
+// Um evento terminou quando passou a data de fim; sem data de fim, quando o dia do início já passou (hora de Lisboa).
+// Eventos periódicos nunca terminam. Eventos terminados deixam de somar visualizações e interações.
+const ENDED_SQL = "(e.evrecorrente = 0 AND COALESCE(e.evdatafim, CAST(DATE_ADD(DATE(e.evdatainicio), INTERVAL 1 DAY) AS DATETIME)) <= ?)";
+
 // Regista uma interação (visualização, clique em bilhetes, favorito, partilha, calendário).
 // Não conta: bots, eventos inexistentes ou não publicados, o próprio organizador e administradores,
 // e repetições (mesma sessão e evento) dentro de uma janela curta.
@@ -414,14 +418,15 @@ async function recordInteraction(db, req, { type, eventId, user, sessionId, sour
   const userAgent = String(req.headers['user-agent'] || '');
   if (!userAgent || BOT_PATTERN.test(userAgent)) return { counted: false, reason: 'bot' };
 
-  const [rows] = await db.query(`SELECT e.evestado, e.evvalor, e.evidorganizador, o.orgidutilizador, c.catnome, l.locdistrito
+  const [rows] = await db.query(`SELECT e.evestado, e.evvalor, e.evidorganizador, o.orgidutilizador, c.catnome, l.locdistrito, ${ENDED_SQL} AS terminado
     FROM evento e
     JOIN organizador o ON o.idorganizador = e.evidorganizador
     JOIN categoria c ON c.idcategoria = e.evidcategoria
     JOIN localizacao l ON l.idlocalizacao = e.evidlocalizacao
-    WHERE e.idevento = ? LIMIT 1`, [eventId]);
+    WHERE e.idevento = ? LIMIT 1`, [lisbonTimestamp(), eventId]);
   const event = rows[0];
   if (!event || !['publicado', 'ativo'].includes(event.evestado)) return { counted: false, reason: 'evento' };
+  if (Number(event.terminado)) return { counted: false, reason: 'terminado' };
   if (user && (user.accountType === 'admin' || Number(event.orgidutilizador) === Number(user.id))) return { counted: false, reason: 'proprio' };
 
   const session = cleanSessionId(sessionId);
@@ -1148,8 +1153,9 @@ async function handler(req, res) {
       if (removed.affectedRows) await interaction('favorito_remove');
       return json(res, 200, { ok: true });
     }
-    const [targets] = await db.query('SELECT idevento FROM evento WHERE idevento=?', [eventId]);
+    const [targets] = await db.query(`SELECT e.idevento, ${ENDED_SQL} AS terminado FROM evento e WHERE e.idevento=?`, [lisbonTimestamp(), eventId]);
     if (!targets[0]) return json(res, 404, { ok: false, message: 'Evento não encontrado.' });
+    if (Number(targets[0].terminado)) return json(res, 409, { ok: false, message: 'Este evento já terminou.' });
     const [found] = await db.query('SELECT idfavorito FROM favorito WHERE favidutilizador=? AND favidevento=?', [user.id, eventId]);
     if (found[0]) { await db.query('DELETE FROM favorito WHERE idfavorito=?', [found[0].idfavorito]); await interaction('favorito_remove'); return json(res, 200, { ok: true, favorite: false }); }
     await db.query('INSERT INTO favorito (favidutilizador,favidevento,favdata) VALUES (?,?,?)', [user.id, eventId, lisbonTimestamp()]);
@@ -1180,9 +1186,9 @@ async function handler(req, res) {
     res.setHeader('Cache-Control', 'no-store');
     const redirect = (location) => { res.setHeader('Location', location); res.statusCode = 302; return res.end(); };
     if (!eventId) return redirect('/');
-    const [targets] = await db.query('SELECT evlinkbilhete, evvalor, evestado FROM evento WHERE idevento=?', [eventId]);
+    const [targets] = await db.query(`SELECT e.evlinkbilhete, e.evvalor, e.evestado, ${ENDED_SQL} AS terminado FROM evento e WHERE e.idevento=?`, [lisbonTimestamp(), eventId]);
     const target = targets[0];
-    const ticketUrl = target && ['publicado', 'ativo'].includes(target.evestado) && Number(target.evvalor) > 0 ? cleanHttpUrl(target.evlinkbilhete).url : null;
+    const ticketUrl = target && ['publicado', 'ativo'].includes(target.evestado) && !Number(target.terminado) && Number(target.evvalor) > 0 ? cleanHttpUrl(target.evlinkbilhete).url : null;
     if (!ticketUrl) return redirect(`/event.html?id=${eventId}`);
     if (req.method === 'GET') {
       await recordInteractionSafe(db, req, { type: 'clique_bilhete', eventId, user: currentUser(req), sessionId: queryParam(req, 's'), source: queryParam(req, 'src') });
