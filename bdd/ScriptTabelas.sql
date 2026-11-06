@@ -268,3 +268,18 @@ CREATE TABLE eventointeracao (
     KEY idx_evi_sessao (evisessao, eviidevento, evitipo),
     KEY idx_evi_utilizador (eviidutilizador)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- Tabela: eventoalteracao (pedidos de alteração a eventos já aprovados)
+-- ------------------------------------------------------------
+-- A versão pública do evento mantém-se até um administrador aprovar a alteração. aldados é um JSON com os campos
+-- validados e as imagens novas; almotivo preenchido significa "alteração recusada".
+CREATE TABLE eventoalteracao (
+    idalteracao INT NOT NULL AUTO_INCREMENT,
+    alidevento INT NOT NULL,
+    aldados LONGTEXT NOT NULL,
+    aldata DATETIME NOT NULL,
+    almotivo VARCHAR(300) NULL,
+    PRIMARY KEY (idalteracao),
+    UNIQUE KEY uq_al_evento (alidevento)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

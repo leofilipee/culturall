@@ -333,6 +333,22 @@ async function applySchema(db) {
     await db.query("UPDATE evento SET evdatapublicacao = COALESCE(evdataaprovacao, evdatasubmissao) WHERE evdatapublicacao IS NULL AND evestado='publicado'");
   }
 
+  // Aprovação obrigatória: os eventos criados antes desta regra (e já visíveis ou ocultos) contam como aprovados.
+  // O limite de data evita aprovar, no futuro, rascunhos novos que o organizador tenha ocultado.
+  await db.query("UPDATE evento SET evdataaprovacao = COALESCE(evdatapublicacao, evdatasubmissao) WHERE evdataaprovacao IS NULL AND evestado IN ('publicado','ativo','oculto','inativo') AND evdatasubmissao < '2026-11-07 00:00:00'");
+
+  // Pedidos de alteração: quando um organizador edita um evento já aprovado, a versão pública mantém-se e as
+  // alterações ficam aqui até um administrador as aprovar (ou o organizador cancelar o pedido).
+  await run(`CREATE TABLE IF NOT EXISTS eventoalteracao (
+    idalteracao INT NOT NULL AUTO_INCREMENT,
+    alidevento INT NOT NULL,
+    aldados LONGTEXT NOT NULL,
+    aldata DATETIME NOT NULL,
+    almotivo VARCHAR(300) NULL,
+    PRIMARY KEY (idalteracao),
+    UNIQUE KEY uq_al_evento (alidevento)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
   // Sem chaves estrangeiras de propósito: o histórico de interações tem de sobreviver ao apagar de eventos e contas.
   // Os atributos do evento (organizador, categoria, distrito, preço) ficam copiados no momento da interação.
   await run(`CREATE TABLE IF NOT EXISTS eventointeracao (
@@ -432,15 +448,18 @@ async function recordInteractionSafe(db, req, details) {
 }
 
 // Devolve { estado, publicaem } a partir de body.visibility ('publish' | 'schedule' | 'hide'), ou { error }.
-function resolveVisibility(body) {
+// Um organizador só pode pôr um evento visível se este já foi aprovado por um administrador; caso contrário, "publicar"
+// e "agendar" submetem o evento para aprovação (estado 'pendente'). O agendamento fica guardado e aplica-se após a aprovação.
+function resolveVisibility(body, { isAdmin = false, approved = false } = {}) {
   const visibility = String(body.visibility || '').toLowerCase();
-  if (visibility === 'publish') return { estado: 'publicado', publicaem: null };
+  const canGoLive = isAdmin || approved;
+  if (visibility === 'publish') return canGoLive ? { estado: 'publicado', publicaem: null } : { estado: 'pendente', publicaem: null };
   if (visibility === 'hide') return { estado: 'oculto', publicaem: null };
   if (visibility === 'schedule') {
     const when = new Date(body.publishAt);
     if (Number.isNaN(when.getTime())) return { error: 'Escolhe a data e hora de publicação.' };
     if (when.getTime() <= Date.now() + 30000) return { error: 'A data de publicação tem de estar no futuro.' };
-    return { estado: 'oculto', publicaem: when.toISOString().slice(0, 19).replace('T', ' ') };
+    return { estado: canGoLive ? 'oculto' : 'pendente', publicaem: when.toISOString().slice(0, 19).replace('T', ' ') };
   }
   return { estado: 'pendente', publicaem: null };
 }
@@ -480,6 +499,30 @@ async function saveEventImages(connection, eventId, images) {
   return saved;
 }
 
+// Aplica o conteúdo (campos + imagens) de um evento. Usado nas edições diretas e na aprovação de pedidos de alteração.
+async function applyEventContent(db, eventId, input, images) {
+  const categoryId = await resolveCategoryId(db, input.category);
+  const locationId = await resolveLocationId(db, input);
+  const fields = ['evtitulo=?', 'evdatainicio=?', 'evdatafim=?', 'evvalor=?', 'evlinkbilhete=?', 'evrecorrente=?', 'evperiodicidade=?', 'evdiasrecorrencia=?', 'evidcategoria=?', 'evidlocalizacao=?'];
+  const values = [input.title, input.startDate, input.endDate, input.price, input.ticketUrl, input.isRecurring ? 1 : 0, input.recurringPattern, input.recurringDays, categoryId, locationId];
+  // A descrição só muda se for enviada (antes, editar um evento apagava-a).
+  if (input.description !== undefined) { fields.push('evdescricao=?'); values.push(input.description); }
+  await db.query(`UPDATE evento SET ${fields.join(',')} WHERE idevento=?`, [...values, eventId]);
+  // Só substitui as imagens se foram enviadas novas; caso contrário mantêm-se as atuais.
+  if (Array.isArray(images) && images.some((image) => /^(data:image\/|https?:\/\/|\/)/i.test(String(image)))) {
+    await db.query('DELETE FROM imagem WHERE imgidevento=?', [eventId]);
+    await saveEventImages(db, eventId, images);
+  }
+}
+
+async function getChangeRequest(db, eventId) {
+  const [rows] = await db.query('SELECT aldados, aldata, almotivo FROM eventoalteracao WHERE alidevento=?', [eventId]);
+  if (!rows[0]) return null;
+  let data = null;
+  try { data = JSON.parse(rows[0].aldados); } catch { data = null; }
+  return data ? { input: data.input, images: Array.isArray(data.images) ? data.images : [], requestedAt: rows[0].aldata, rejectReason: rows[0].almotivo || '' } : null;
+}
+
 // Elimina uma conta de utilizador da base de dados. Se for organizador, apaga primeiro os seus eventos
 // (a chave estrangeira evento -> organizador é RESTRICT); o resto (favoritos, perfil de organizador,
 // preferências, notificações) cai em cascata e as visualizações ficam anónimas.
@@ -489,6 +532,7 @@ async function deleteUserAccount(db, userId) {
     await connection.beginTransaction();
     const [organizers] = await connection.query('SELECT idorganizador FROM organizador WHERE orgidutilizador=?', [userId]);
     for (const organizer of organizers) {
+      await connection.query('DELETE FROM eventoalteracao WHERE alidevento IN (SELECT idevento FROM evento WHERE evidorganizador=?)', [organizer.idorganizador]);
       await connection.query('DELETE FROM evento WHERE evidorganizador=?', [organizer.idorganizador]);
     }
     // O histórico de interações fica (é agregado e anónimo), mas deixa de apontar para a conta apagada.
@@ -503,7 +547,7 @@ async function deleteUserAccount(db, userId) {
   }
 }
 
-async function eventRows(connection, status, ownEmail) {
+async function eventRows(connection, status, ownEmail, eventId = null) {
   await releaseScheduledEvents(connection);
   const params = [];
   const conditions = [];
@@ -519,12 +563,19 @@ async function eventRows(connection, status, ownEmail) {
     conditions.push('o.orgemail = ?');
     params.push(ownEmail);
   }
+  if (eventId) {
+    conditions.push('e.idevento = ?');
+    params.push(eventId);
+  }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   // A capa já não viaja em base64 na lista (pesava vários MB): devolve-se só o id da imagem e o browser
   // vai buscá-la a /api/event-cover, que é colocada em cache.
   const [rows] = await connection.query(`
     SELECT e.*, c.catnome, l.locmorada, l.loccidade, l.locdistrito, l.loclatitude, l.loclongitude, o.orgnome, o.orgemail,
       (SELECT COUNT(*) FROM eventointeracao v WHERE v.eviidevento=e.idevento AND v.evitipo='visualizacao' AND v.evisimulado=0) AS totalVisualizacoes,
+      (SELECT COUNT(*) FROM eventoalteracao al WHERE al.alidevento=e.idevento AND al.almotivo IS NULL) AS alteracaoPendente,
+      (SELECT al.almotivo FROM eventoalteracao al WHERE al.alidevento=e.idevento LIMIT 1) AS alteracaoMotivo,
+      (SELECT COUNT(*) FROM eventoalteracao al WHERE al.alidevento=e.idevento) AS alteracaoExiste,
       (SELECT img.idimagem FROM imagem img WHERE img.imgidevento=e.idevento AND img.imgtipo='capa' ORDER BY img.idimagem LIMIT 1) AS capa_id
     FROM evento e JOIN categoria c ON c.idcategoria=e.evidcategoria
     JOIN localizacao l ON l.idlocalizacao=e.evidlocalizacao JOIN organizador o ON o.idorganizador=e.evidorganizador
@@ -540,10 +591,13 @@ async function eventRows(connection, status, ownEmail) {
     hasTicket: Number(row.evvalor || 0) > 0 && Boolean(cleanHttpUrl(row.evlinkbilhete).url),
     publishedAt: row.evdatapublicacao || '', status: row.evestado,
     statusLabel: row.evestado === 'oculto' && row.evpublicaem ? 'Agendado' : statusLabel(row.evestado),
-    scheduledFor: row.evestado === 'oculto' && row.evpublicaem ? new Date(`${String(row.evpublicaem instanceof Date ? row.evpublicaem.toISOString() : row.evpublicaem).replace(' ', 'T').replace(/Z$/, '')}Z`).toISOString() : '',
+    scheduledFor: ['oculto', 'pendente'].includes(row.evestado) && row.evpublicaem ? new Date(`${String(row.evpublicaem instanceof Date ? row.evpublicaem.toISOString() : row.evpublicaem).replace(' ', 'T').replace(/Z$/, '')}Z`).toISOString() : '',
     isRecurring: Boolean(row.evrecorrente), recurringPattern: row.evperiodicidade || '',
     recurringDays: row.evdiasrecorrencia || '', submittedAt: row.evdatasubmissao || '', approvedAt: row.evdataaprovacao || '',
-    rejectReason: row.evmotivorecusa || '', organizer: row.orgnome, organizerEmail: row.orgemail,
+    rejectReason: row.evmotivorecusa || '',
+    hasPendingChange: Number(row.alteracaoPendente || 0) > 0,
+    changeRejectReason: Number(row.alteracaoExiste || 0) > 0 && Number(row.alteracaoPendente || 0) === 0 ? (row.alteracaoMotivo || '') : '',
+    organizer: row.orgnome, organizerEmail: row.orgemail,
     image: row.capa_id ? `/api/event-cover?id=${Number(row.idevento)}&v=${Number(row.capa_id)}` : ''
   }));
 }
@@ -924,50 +978,76 @@ async function handler(req, res) {
       if (input.error) return json(res, 422, { ok: false, message: input.error });
       const [orgs] = await db.query('SELECT idorganizador FROM organizador WHERE orgidutilizador=? LIMIT 1', [actor.id]);
       if (!orgs[0]) return json(res, 422, { ok: false, message: 'O utilizador autenticado não tem perfil de organizador.' });
-      const visibility = resolveVisibility(body);
+      const isAdminActor = actor.accountType === 'admin';
+      const visibility = resolveVisibility(body, { isAdmin: isAdminActor });
       if (visibility.error) return json(res, 422, { ok: false, message: visibility.error });
       const categoryId = await resolveCategoryId(db, input.category);
       const locationId = await resolveLocationId(db, input);
       const publishedNow = visibility.estado === 'publicado' ? utcTimestamp() : null;
-      const [result] = await db.query('INSERT INTO evento (evtitulo,evdescricao,evdatainicio,evdatafim,evvalor,evlinkbilhete,evestado,evpublicaem,evdatapublicacao,evrecorrente,evperiodicidade,evdiasrecorrencia,evidcategoria,evidlocalizacao,evidorganizador) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [input.title, input.description ?? null, input.startDate, input.endDate, input.price, input.ticketUrl, visibility.estado, visibility.publicaem, publishedNow, input.isRecurring ? 1 : 0, input.recurringPattern, input.recurringDays, categoryId, locationId, orgs[0].idorganizador]);
+      const approvedNow = isAdminActor && ['publicado', 'oculto'].includes(visibility.estado) ? utcTimestamp() : null;
+      const [result] = await db.query('INSERT INTO evento (evtitulo,evdescricao,evdatainicio,evdatafim,evvalor,evlinkbilhete,evestado,evpublicaem,evdatapublicacao,evdataaprovacao,evrecorrente,evperiodicidade,evdiasrecorrencia,evidcategoria,evidlocalizacao,evidorganizador) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [input.title, input.description ?? null, input.startDate, input.endDate, input.price, input.ticketUrl, visibility.estado, visibility.publicaem, publishedNow, approvedNow, input.isRecurring ? 1 : 0, input.recurringPattern, input.recurringDays, categoryId, locationId, orgs[0].idorganizador]);
       if (Array.isArray(body.images)) {
         await saveEventImages(db, result.insertId, body.images);
       }
-      return json(res, 201, { ok: true, message: 'Evento criado com sucesso.', eventId: result.insertId });
+      return json(res, 201, {
+        ok: true,
+        eventId: result.insertId,
+        status: visibility.estado,
+        message: visibility.estado === 'pendente'
+          ? 'Evento enviado para aprovação. A aprovação pode demorar de 1 a 3 dias.'
+          : 'Evento criado com sucesso.'
+      });
     }
     if (req.method === 'PATCH') {
       const actor = requireUser(req, res, ['organizador', 'admin']); if (!actor) return;
       const eventId = Number(body.eventId), action = String(body.action || '').toLowerCase();
-      const [rows] = await db.query('SELECT e.idevento,o.orgemail FROM evento e JOIN organizador o ON o.idorganizador=e.evidorganizador WHERE e.idevento=?', [eventId]);
+      const [rows] = await db.query('SELECT e.idevento,e.evdataaprovacao,o.orgemail FROM evento e JOIN organizador o ON o.idorganizador=e.evidorganizador WHERE e.idevento=?', [eventId]);
       if (!rows[0]) return json(res, 404, { ok: false, message: 'Evento não encontrado.' });
       if (actor.accountType !== 'admin' && actor.email.toLowerCase() !== rows[0].orgemail.toLowerCase()) return json(res, 403, { ok: false, message: 'Sem permissão.' });
-      const simpleStates = { inactivate: 'inativo', hide: 'oculto', show: 'publicado' };
-      if (action === 'delete') await db.query('DELETE FROM evento WHERE idevento=?', [eventId]);
+      const isAdminActor = actor.accountType === 'admin';
+      const approved = Boolean(rows[0].evdataaprovacao);
+      // "Mostrar" por parte do organizador só é imediato se o evento já foi aprovado; senão volta à fila de aprovação.
+      const simpleStates = { inactivate: 'inativo', hide: 'oculto', show: (isAdminActor || approved) ? 'publicado' : 'pendente' };
+      if (action === 'delete') { await db.query('DELETE FROM eventoalteracao WHERE alidevento=?', [eventId]); await db.query('DELETE FROM evento WHERE idevento=?', [eventId]); }
       else if (action === 'update') {
         const input = validateEventInput(body);
         if (input.error) return json(res, 422, { ok: false, message: input.error });
-        const visibility = resolveVisibility(body);
+        const visibility = resolveVisibility(body, { isAdmin: isAdminActor, approved });
         if (visibility.error) return json(res, 422, { ok: false, message: visibility.error });
-        const categoryId = await resolveCategoryId(db, input.category);
-        const locationId = await resolveLocationId(db, input);
-        const fields = ['evtitulo=?', 'evdatainicio=?', 'evdatafim=?', 'evvalor=?', 'evlinkbilhete=?', 'evestado=?', 'evpublicaem=?', 'evrecorrente=?', 'evperiodicidade=?', 'evdiasrecorrencia=?', 'evidcategoria=?', 'evidlocalizacao=?'];
-        const values = [input.title, input.startDate, input.endDate, input.price, input.ticketUrl, visibility.estado, visibility.publicaem, input.isRecurring ? 1 : 0, input.recurringPattern, input.recurringDays, categoryId, locationId];
-        // A descrição só muda se for enviada (antes, editar um evento apagava-a).
-        if (input.description !== undefined) { fields.push('evdescricao=?'); values.push(input.description); }
-        await db.query(`UPDATE evento SET ${fields.join(',')} WHERE idevento=?`, [...values, eventId]);
-        if (visibility.estado === 'publicado') await db.query('UPDATE evento SET evdatapublicacao=COALESCE(evdatapublicacao, ?) WHERE idevento=?', [utcTimestamp(), eventId]);
-        // Só substitui as imagens se o organizador enviou novas; caso contrário mantêm-se as atuais.
-        if (Array.isArray(body.images) && body.images.some((image) => /^(data:image\/|https?:\/\/|\/)/i.test(String(image)))) {
-          await db.query('DELETE FROM imagem WHERE imgidevento=?', [eventId]);
-          await saveEventImages(db, eventId, body.images);
+        const stateFields = ['evestado=?', 'evpublicaem=?'];
+        const stateValues = [visibility.estado, visibility.publicaem];
+        if (visibility.estado === 'pendente') stateFields.push('evmotivorecusa=NULL');
+        if (approved && !isAdminActor) {
+          // Evento já aprovado: o estado (publicar/agendar/ocultar) aplica-se já, mas as alterações ao conteúdo
+          // só entram em vigor depois de um administrador as aprovar. Até lá, a versão atual mantém-se.
+          await db.query(`UPDATE evento SET ${stateFields.join(',')} WHERE idevento=?`, [...stateValues, eventId]);
+          const images = Array.isArray(body.images) ? body.images.filter((image) => /^(data:image\/|https?:\/\/|\/)/i.test(String(image))) : [];
+          await db.query('REPLACE INTO eventoalteracao (alidevento, aldados, aldata, almotivo) VALUES (?,?,?,NULL)', [eventId, JSON.stringify({ input, images }), utcTimestamp()]);
+        } else {
+          await db.query(`UPDATE evento SET ${stateFields.join(',')} WHERE idevento=?`, [...stateValues, eventId]);
+          await applyEventContent(db, eventId, input, body.images);
+          if (isAdminActor) await db.query('DELETE FROM eventoalteracao WHERE alidevento=?', [eventId]);
         }
+        if (visibility.estado === 'publicado') await db.query('UPDATE evento SET evdatapublicacao=COALESCE(evdatapublicacao, ?) WHERE idevento=?', [utcTimestamp(), eventId]);
+        if (isAdminActor && ['publicado', 'oculto'].includes(visibility.estado)) await db.query('UPDATE evento SET evdataaprovacao=COALESCE(evdataaprovacao, ?) WHERE idevento=?', [utcTimestamp(), eventId]);
+      } else if (action === 'cancel_change') {
+        await db.query('DELETE FROM eventoalteracao WHERE alidevento=?', [eventId]);
+      } else if (action === 'cancel_request') {
+        const [cur] = await db.query('SELECT evestado FROM evento WHERE idevento=?', [eventId]);
+        if (cur[0]?.evestado !== 'pendente') return json(res, 409, { ok: false, message: 'Este evento já não está à espera de aprovação.' });
+        await db.query("UPDATE evento SET evestado='oculto', evpublicaem=NULL WHERE idevento=?", [eventId]);
+        return json(res, 200, { ok: true, status: 'oculto', message: 'Pedido de aprovação cancelado. O evento ficou oculto e podes voltar a submetê-lo quando quiseres.' });
       } else if (simpleStates[action]) {
         await db.query('UPDATE evento SET evestado=?, evpublicaem=NULL WHERE idevento=?', [simpleStates[action], eventId]);
+        if (isAdminActor && simpleStates[action] === 'publicado') await db.query('UPDATE evento SET evdataaprovacao=COALESCE(evdataaprovacao, ?) WHERE idevento=?', [utcTimestamp(), eventId]);
         if (simpleStates[action] === 'publicado') await db.query('UPDATE evento SET evdatapublicacao=COALESCE(evdatapublicacao, ?) WHERE idevento=?', [utcTimestamp(), eventId]);
       } else {
         return json(res, 422, { ok: false, message: 'Ação inválida.' });
       }
-      return json(res, 200, { ok: true });
+      const [after] = await db.query('SELECT evestado FROM evento WHERE idevento=?', [eventId]);
+      return json(res, 200, { ok: true, status: after[0]?.evestado ?? null, message: action === 'update' && approved && !isAdminActor
+        ? 'Pedido de alteração enviado. A versão atual mantém-se até um administrador aprovar as mudanças (pode demorar de 1 a 3 dias).'
+        : after[0]?.evestado === 'pendente' ? 'Evento enviado para aprovação. A aprovação pode demorar de 1 a 3 dias.' : undefined, changeRequested: action === 'update' && approved && !isAdminActor });
     }
   }
   if (route === 'event-images' && req.method === 'GET') {
@@ -1185,16 +1265,83 @@ async function handler(req, res) {
     const action = String(body.action || '').toLowerCase(), eventId = Number(body.eventId);
     const states = { approve: 'publicado', show: 'publicado', hide: 'oculto', reject: 'recusado', inactivate: 'inativo' };
     if (!eventId) return json(res, 422, { ok: false, message: 'Evento inválido.' });
-    if (action === 'delete') await db.query('DELETE FROM evento WHERE idevento=?', [eventId]);
-    else if (states[action]) {
+    if (action === 'delete') { await db.query('DELETE FROM eventoalteracao WHERE alidevento=?', [eventId]); await db.query('DELETE FROM evento WHERE idevento=?', [eventId]); }
+    else if (action === 'approve_change' || action === 'reject_change') {
+      const change = await getChangeRequest(db, eventId);
+      if (!change || !change.input) return json(res, 404, { ok: false, message: 'Não há nenhum pedido de alteração para este evento.' });
+      if (action === 'approve_change') {
+        await applyEventContent(db, eventId, change.input, change.images);
+        await db.query('DELETE FROM eventoalteracao WHERE alidevento=?', [eventId]);
+      } else {
+        const reason = String(body.reason || '').trim().slice(0, 300) || 'Sem motivo indicado.';
+        await db.query('UPDATE eventoalteracao SET almotivo=? WHERE alidevento=?', [reason, eventId]);
+      }
+    } else if (states[action]) {
       const now = utcTimestamp();
-      await db.query('UPDATE evento SET evestado=?, evpublicaem=NULL, evmotivorecusa=? WHERE idevento=?', [states[action], action === 'reject' ? (String(body.reason || '').trim().slice(0, 300) || null) : null, eventId]);
-      if (action === 'approve') await db.query('UPDATE evento SET evdataaprovacao=? WHERE idevento=?', [now, eventId]);
-      if (states[action] === 'publicado') await db.query('UPDATE evento SET evdatapublicacao=COALESCE(evdatapublicacao, ?) WHERE idevento=?', [now, eventId]);
+      const [current] = await db.query('SELECT evpublicaem FROM evento WHERE idevento=?', [eventId]);
+      if (!current[0]) return json(res, 404, { ok: false, message: 'Evento não encontrado.' });
+      // Se o organizador agendou a publicação, a aprovação mantém o agendamento (o evento fica oculto até à data).
+      const scheduled = ['approve', 'show'].includes(action) && current[0].evpublicaem && new Date(`${new Date(current[0].evpublicaem).toISOString().slice(0, 19)}Z`).getTime() > Date.now();
+      const nextState = scheduled ? 'oculto' : states[action];
+      await db.query('UPDATE evento SET evestado=?, evpublicaem=?, evmotivorecusa=? WHERE idevento=?', [nextState, scheduled ? current[0].evpublicaem : null, action === 'reject' ? (String(body.reason || '').trim().slice(0, 300) || null) : null, eventId]);
+      if (['approve', 'show'].includes(action)) await db.query('UPDATE evento SET evdataaprovacao=COALESCE(evdataaprovacao, ?) WHERE idevento=?', [now, eventId]);
+      if (action === 'reject') await db.query('UPDATE evento SET evdataaprovacao=NULL WHERE idevento=?', [eventId]);
+      if (nextState === 'publicado') await db.query('UPDATE evento SET evdatapublicacao=COALESCE(evdatapublicacao, ?) WHERE idevento=?', [now, eventId]);
     } else {
       return json(res, 422, { ok: false, message: 'Ação inválida.' });
     }
     return json(res, 200, { ok: true });
+  }
+  // Revisão de um evento (administrador ou dono): o evento em qualquer estado e, se existir, o pedido de alteração
+  // já com a "versão proposta" montada e a lista de diferenças.
+  if (route === 'event-review' && req.method === 'GET') {
+    const actor = requireUser(req, res, ['admin', 'organizador']); if (!actor) return;
+    const eventId = Number(req.query?.id || new URL(req.url, 'http://localhost').searchParams.get('id'));
+    if (!eventId) return json(res, 422, { ok: false, message: 'Evento inválido.' });
+    const [found] = await db.query('SELECT 1 FROM evento WHERE idevento=?', [eventId]);
+    if (!found[0]) return json(res, 404, { ok: false, message: 'Evento não encontrado.' });
+    const ownEmail = actor.accountType === 'admin' ? null : actor.email;
+    const [event] = await eventRows(db, 'all', ownEmail, eventId);
+    if (!event) return json(res, 403, { ok: false, message: 'Sem permissão.' });
+    const change = await getChangeRequest(db, eventId);
+    let proposed = null;
+    let diff = [];
+    if (change?.input) {
+      const input = change.input;
+      const label = (key) => ({ title: 'Título', description: 'Descrição', startDate: 'Início', endDate: 'Fim', price: 'Preço', ticketUrl: 'Link de bilhetes', category: 'Categoria', city: 'Cidade', district: 'Distrito', street: 'Morada / local', isRecurring: 'Evento periódico', recurringPattern: 'Periodicidade', recurringDays: 'Dias' })[key];
+      const fmtDate = (value) => (value ? new Date(value).toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' }) : '—');
+      const current = { title: event.title, description: event.description, startDate: fmtDate(event.startDate), endDate: fmtDate(event.endDate), price: event.priceLabel, ticketUrl: event.ticketUrl, category: event.category, city: event.city, district: event.district, street: event.street, isRecurring: event.isRecurring ? 'Sim' : 'Não', recurringPattern: event.recurringPattern, recurringDays: event.recurringDays };
+      const next = { title: input.title, description: input.description === undefined ? event.description : (input.description || ''), startDate: fmtDate(input.startDate), endDate: fmtDate(input.endDate), price: formatPrice(input.price).priceLabel, ticketUrl: input.ticketUrl || '', category: input.category, city: input.city, district: input.district, street: input.street || '', isRecurring: input.isRecurring ? 'Sim' : 'Não', recurringPattern: input.recurringPattern || '', recurringDays: input.recurringDays || '' };
+      for (const key of Object.keys(current)) {
+        if (String(current[key] ?? '').trim() !== String(next[key] ?? '').trim()) diff.push({ field: key, label: label(key), from: String(current[key] ?? '') || '—', to: String(next[key] ?? '') || '—' });
+      }
+      if (change.images.length) diff.push({ field: 'images', label: 'Imagens', from: 'Atuais', to: `${change.images.length} nova(s) imagem(ns)` });
+      proposed = {
+        ...event, title: input.title, description: input.description === undefined ? event.description : (input.description || ''),
+        startDate: input.startDate, eventDate: input.startDate, endDate: input.endDate || '', ...formatPrice(input.price),
+        ticketUrl: input.ticketUrl || '', hasTicket: Number(input.price || 0) > 0 && Boolean(input.ticketUrl), category: input.category, city: input.city, district: input.district,
+        street: input.street || '', location: [input.street, input.city].filter(Boolean).join(', '), isRecurring: Boolean(input.isRecurring),
+        recurringPattern: input.recurringPattern || '', recurringDays: input.recurringDays || '',
+        dateLabel: new Date(input.startDate).toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' }),
+        image: change.images[0] || event.image, images: change.images
+      };
+    }
+    return json(res, 200, { ok: true, event, change: change ? { requestedAt: change.requestedAt, rejectReason: change.rejectReason, diff, proposed } : null });
+  }
+  // Sino de notificações do administrador: o que está à espera de revisão.
+  if (route === 'admin/notifications' && req.method === 'GET') {
+    const actor = requireUser(req, res, ['admin']); if (!actor) return;
+    const [events] = await db.query("SELECT e.idevento AS id, e.evtitulo AS title, e.evdatasubmissao AS at, o.orgnome AS organizer FROM evento e JOIN organizador o ON o.idorganizador=e.evidorganizador WHERE e.evestado='pendente' ORDER BY e.evdatasubmissao DESC LIMIT 20");
+    const [changes] = await db.query("SELECT e.idevento AS id, e.evtitulo AS title, al.aldata AS at, o.orgnome AS organizer FROM eventoalteracao al JOIN evento e ON e.idevento=al.alidevento JOIN organizador o ON o.idorganizador=e.evidorganizador WHERE al.almotivo IS NULL ORDER BY al.aldata DESC LIMIT 20");
+    const [organizers] = await db.query("SELECT idorganizador AS id, orgnome AS name, orgemail AS email, orginicio AS at FROM organizador WHERE orgestado='pendente' ORDER BY orginicio DESC LIMIT 20");
+    const [counts] = await db.query("SELECT (SELECT COUNT(*) FROM evento WHERE evestado='pendente') AS events, (SELECT COUNT(*) FROM eventoalteracao WHERE almotivo IS NULL) AS changes, (SELECT COUNT(*) FROM organizador WHERE orgestado='pendente') AS organizers");
+    const pendingEvents = Number(counts[0].events), pendingChanges = Number(counts[0].changes), pendingOrganizers = Number(counts[0].organizers);
+    return json(res, 200, {
+      ok: true, pendingEvents, pendingChanges, pendingOrganizers, total: pendingEvents + pendingChanges + pendingOrganizers,
+      events: events.map((row) => ({ id: Number(row.id), title: row.title, organizer: row.organizer, at: row.at })),
+      changes: changes.map((row) => ({ id: Number(row.id), title: row.title, organizer: row.organizer, at: row.at })),
+      organizers: organizers.map((row) => ({ id: Number(row.id), name: row.name, email: row.email, at: row.at }))
+    });
   }
   return json(res, 404, { ok: false, message: 'Endpoint não encontrado.' });
 }

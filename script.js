@@ -130,6 +130,11 @@ document.addEventListener('DOMContentLoaded', () => {
       throw error;
     }
 
+    // Uma ação de administração bem-sucedida pode ter mudado o que está pendente: o sino atualiza-se.
+    if (String(url).startsWith('/api/admin/') && String(options.method ?? 'GET').toUpperCase() !== 'GET') {
+      window.dispatchEvent(new CustomEvent('culturall:admin-changed'));
+    }
+
     return payload;
   };
 
@@ -224,6 +229,10 @@ document.addEventListener('DOMContentLoaded', () => {
     loaded: false,
     items: []
   };
+
+  // Revisão de um evento (administrador ou dono): evento em qualquer estado + pedido de alteração, se existir.
+  let eventReviewState = null;
+  let eventReviewVersion = null;
 
   let rerenderListingPage = null;
 
@@ -412,6 +421,27 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  // Cancelar o pedido de aprovação de um evento novo ("cancel_request") ou um pedido de alteração ("cancel_change").
+  const cancelOrganizerRequest = async (eventId, action, onDone) => {
+    const question = action === 'cancel_request'
+      ? 'Cancelar o pedido de aprovação? O evento fica oculto e podes voltar a submetê-lo mais tarde.'
+      : 'Cancelar o pedido de alteração? O evento mantém a versão atual e as alterações pedidas são descartadas.';
+    if (!window.confirm(question)) {
+      return;
+    }
+
+    try {
+      const response = await requestJson('/api/events', { method: 'PATCH', body: JSON.stringify({ eventId: Number(eventId), action }) });
+      showToast(response?.message ?? (action === 'cancel_change' ? 'Pedido de alteração cancelado.' : 'Pedido cancelado.'));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Não foi possível cancelar o pedido.');
+    }
+
+    if (typeof onDone === 'function') {
+      await onDone();
+    }
+  };
+
   const loadOrganizerEvents = async () => {
     try {
       const response = await requestJson('/api/events?scope=own&status=all');
@@ -467,6 +497,13 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   const getVisibleEvents = () => getAllEvents().filter((event) => normalizePublicEventStatus(event.status) === 'active');
+
+  // O evento pertence ao organizador com sessão iniciada?
+  const isOwnEvent = (event, session = getSession()) => Boolean(
+    session?.accountType === 'organizador'
+    && event?.organizerEmail
+    && String(event.organizerEmail).toLowerCase() === String(session.email ?? '').toLowerCase()
+  );
 
   // Favoritos de visitantes (sem sessão) ficam guardados no browser.
   const localFavoritesKey = 'culturall:favorites';
@@ -752,6 +789,106 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const getFavoriteDetailLabel = (eventId) => (isFavorite(eventId) ? 'Remover dos Favoritos' : 'Adicionar aos Favoritos');
 
+  // Sino de notificações do administrador: contas de organizador e eventos à espera de aprovação.
+  const ensureAdminBell = (rootDocument = document) => {
+    const actions = rootDocument.querySelector('.topbar-actions');
+    if (!actions || actions.querySelector('.admin-bell')) {
+      return;
+    }
+
+    const bell = rootDocument.createElement('div');
+    bell.className = 'admin-bell';
+    bell.innerHTML = `
+      <button class="admin-bell-btn" type="button" aria-label="Notificações" aria-haspopup="true" aria-expanded="false">
+        <svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6.5 2 6.5H4S6 14 6 9Z"></path><path d="M10 19a2 2 0 0 0 4 0"></path></svg>
+        <span class="admin-bell-badge" hidden>0</span>
+      </button>
+      <div class="admin-bell-menu" role="menu" hidden></div>
+    `;
+    actions.prepend(bell);
+
+    const button = bell.querySelector('.admin-bell-btn');
+    const badge = bell.querySelector('.admin-bell-badge');
+    const menu = bell.querySelector('.admin-bell-menu');
+    const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
+
+    const render = (data) => {
+      const total = Number(data?.total ?? 0);
+      badge.hidden = total === 0;
+      badge.textContent = total > 99 ? '99+' : String(total);
+      button.setAttribute('aria-label', total ? `Notificações: ${total} por tratar` : 'Notificações: nada pendente');
+
+      if (!total) {
+        menu.innerHTML = '<p class="admin-bell-empty">Tudo em dia. Não há nada pendente.</p>';
+        return;
+      }
+
+      const events = Array.isArray(data.events) ? data.events : [];
+      const changes = Array.isArray(data.changes) ? data.changes : [];
+      const organizers = Array.isArray(data.organizers) ? data.organizers : [];
+      const eventLink = (item, kind) => `
+        <a role="menuitem" class="admin-bell-item" href="event.html?id=${encodeURIComponent(item.id)}&src=admin">
+          <strong>${kind}</strong>
+          <span>${esc(item.title)}${item.organizer ? ` · ${esc(item.organizer)}` : ''}</span>
+        </a>`;
+      const more = (shown, total, tab) => (Number(total) > shown
+        ? `<a role="menuitem" class="admin-bell-more" href="profile.html?tab=${tab}">Ver todos (${Number(total)})</a>` : '');
+      menu.innerHTML = `
+        <p class="admin-bell-title">Por tratar</p>
+        ${events.slice(0, 4).map((item) => eventLink(item, 'Evento por aprovar')).join('')}
+        ${more(Math.min(events.length, 4), data.pendingEvents, 'moderation')}
+        ${changes.slice(0, 4).map((item) => eventLink(item, 'Pedido de alteração')).join('')}
+        ${more(Math.min(changes.length, 4), data.pendingChanges, 'moderation')}
+        ${data.pendingOrganizers ? `
+          <a role="menuitem" class="admin-bell-item" href="profile.html?tab=organizers">
+            <strong>${plural(Number(data.pendingOrganizers), 'conta de organizador por validar', 'contas de organizador por validar')}</strong>
+            <span>${organizers.slice(0, 3).map((item) => esc(item.name || item.email)).join(' · ')}</span>
+          </a>` : ''}
+      `;
+    };
+
+    const refresh = async () => {
+      try {
+        render(await requestJson('/api/admin/notifications'));
+      } catch {
+        // Sem rede ou sem permissão: o sino fica como está.
+      }
+    };
+
+    const setOpen = (open) => {
+      menu.hidden = !open;
+      button.setAttribute('aria-expanded', String(open));
+    };
+
+    button.addEventListener('click', (clickEvent) => {
+      clickEvent.stopPropagation();
+      const willOpen = menu.hidden;
+      setOpen(willOpen);
+      if (willOpen) {
+        void refresh();
+      }
+    });
+    rootDocument.addEventListener('click', (clickEvent) => {
+      if (!bell.contains(clickEvent.target)) {
+        setOpen(false);
+      }
+    });
+    rootDocument.addEventListener('keydown', (keyEvent) => {
+      if (keyEvent.key === 'Escape') {
+        setOpen(false);
+      }
+    });
+    window.addEventListener('culturall:admin-changed', () => void refresh());
+    window.setInterval(() => {
+      if (!rootDocument.hidden) {
+        void refresh();
+      }
+    }, 60000);
+
+    menu.innerHTML = '<p class="admin-bell-empty">A carregar…</p>';
+    void refresh();
+  };
+
   const syncLoginHeaderState = (rootDocument = document) => {
     const session = getSession();
     const loginToggleBtn = rootDocument.getElementById('loginToggleBtn');
@@ -765,6 +902,10 @@ document.addEventListener('DOMContentLoaded', () => {
     loginToggleBtn.replaceChildren();
     loginToggleBtn.insertAdjacentHTML('afterbegin', session ? iconLogout : iconLogin);
     loginToggleBtn.append(document.createTextNode(session ? 'Sair' : 'Entrar'));
+
+    if (session?.accountType === 'admin') {
+      ensureAdminBell(rootDocument);
+    }
 
     if (session) {
       accountChip.hidden = false;
@@ -877,6 +1018,9 @@ document.addEventListener('DOMContentLoaded', () => {
           ${roleCanFavorite() ? `<button class="favorite-btn${isFavorite(event.id) ? ' active' : ''}" type="button" aria-label="${getFavoriteAriaLabel(event.id)}" aria-pressed="${isFavorite(event.id) ? 'true' : 'false'}" data-event-id="${esc(event.id)}">
             <svg viewBox="0 0 24 24"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.4-7 10-7 10Z"></path></svg>
           </button>` : ''}
+          ${isOwnEvent(event) ? `<button class="edit-event-btn" type="button" aria-label="Editar evento" title="Editar evento" data-edit-event="${esc(event.id)}">
+            <svg viewBox="0 0 24 24"><path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3Z"></path><path d="m13.5 6.5 3 3"></path></svg>
+          </button>` : ''}
         </div>
         ${timing.label ? `<span class="event-timing ${timing.tone}">${timing.tone === 'live' ? '<i></i>' : ''}${timing.label}</span>` : ''}
         <img src="${esc(event.image)}" alt="${esc(event.title)}" loading="lazy" />
@@ -940,6 +1084,21 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast('A abrir o Google Calendar…');
   };
 
+  // Parágrafos: uma linha em branco separa parágrafos; quebras simples mantêm-se como quebra de linha.
+  const renderDescriptionHtml = (text) => {
+    const clean = String(text ?? '').replace(/\r\n?/g, '\n').trim();
+    if (!clean) {
+      return '<p>Descrição indisponível no momento. Este evento faz parte da seleção cultural da plataforma.</p>';
+    }
+
+    return clean
+      .split(/\n\s*\n+/)
+      .map((block) => block.trim())
+      .filter(Boolean)
+      .map((block) => `<p>${esc(block).replace(/\n/g, '<br />')}</p>`)
+      .join('');
+  };
+
   const renderEventDetailPage = () => {
     const detailRoot = document.getElementById('eventDetailRoot');
     if (!detailRoot) {
@@ -948,33 +1107,77 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const url = new URL(window.location.href);
     const eventId = url.searchParams.get('id');
-    const event = eventId ? getEventById(eventId) : null;
+    const session = getSession();
+    const isAdminViewer = session?.accountType === 'admin';
+    const review = eventReviewState && String(eventReviewState.event?.id) === String(eventId) ? eventReviewState : null;
+    const change = review?.change ?? null;
+    // O organizador também consegue abrir os seus eventos que ainda não são públicos (pendentes, ocultos, agendados…) e o administrador qualquer um.
+    const ownRaw = eventId && session?.accountType === 'organizador'
+      ? organizerEventsState.items.find((item) => normalizeEventId(item.id) === normalizeEventId(eventId) && isOwnEvent(item, session))
+      : null;
+    // Pedido de alteração: o administrador abre por defeito a versão proposta; o dono abre a versão atual.
+    if (!eventReviewVersion) {
+      eventReviewVersion = isAdminViewer ? 'proposta' : 'atual';
+    }
+    const showProposed = Boolean(change?.proposed) && !change.rejectReason && eventReviewVersion === 'proposta';
+    const baseEvent = eventId ? (getEventById(eventId) ?? (review ? normalizeServerEvent(review.event) : null) ?? (ownRaw ? normalizeServerEvent(ownRaw) : null)) : null;
+    const event = baseEvent && showProposed ? normalizeServerEvent(change.proposed) : baseEvent;
 
     if (!event) {
       window.location.href = 'index.html';
       return;
     }
 
+    const isOwner = Boolean(ownRaw) || isOwnEvent(event, session);
+    const ownRecord = ownRaw ?? (isOwner ? (review?.event ?? organizerEventsState.items.find((item) => normalizeEventId(item.id) === normalizeEventId(event.id))) : null);
+    const adminRecord = isAdminViewer ? (review?.event ?? null) : null;
+    const adminStatus = String(adminRecord?.status ?? '');
+    const adminNeedsReview = isAdminViewer && Boolean(adminRecord) && (adminStatus === 'pendente' || (Boolean(change) && !change.rejectReason));
+    const changeIsPending = Boolean(change) && !change.rejectReason;
+    const ownerStatus = String(ownRecord?.status ?? (isOwner ? 'publicado' : ''));
+    const ownerIsLive = ['publicado', 'ativo'].includes(ownerStatus);
+    let ownerView = 'organizador';
+    try {
+      const requestedView = url.searchParams.get('view') ?? localStorage.getItem('culturall:ownerView');
+      ownerView = requestedView === 'utilizador' ? 'utilizador' : 'organizador';
+    } catch {
+      // Sem localStorage, abre na visão de organizador.
+    }
+
     const knownSources = ['lista', 'mapa', 'destaques', 'pesquisa', 'relacionados', 'perfil', 'partilha', 'calendario'];
     const requestedSource = url.searchParams.get('src');
     const detailSource = knownSources.includes(requestedSource) ? requestedSource : 'direto';
-    trackInteraction(event.id, 'visualizacao', detailSource);
+    // As visitas do próprio organizador à sua página não contam para as estatísticas.
+    if (!isOwner && !isAdminViewer) {
+      trackInteraction(event.id, 'visualizacao', detailSource);
+    }
 
     // Eventos pagos com bilheteira passam por /api/go (regista o clique e redireciona). Os de teste (demo) vão direto.
     const ticketHref = !event.hasTicket
       ? ''
-      : isTrackableEventId(event.id)
+      : (isOwner || isAdminViewer || showProposed || !isTrackableEventId(event.id))
+        ? event.ticketUrl
+        : isTrackableEventId(event.id)
         ? `/api/go?id=${encodeURIComponent(event.id)}&s=${encodeURIComponent(getTrackingSessionId())}&src=${encodeURIComponent(detailSource)}`
         : event.ticketUrl;
 
-    const session = getSession();
     const relatedEvents = getVisibleEvents()
       .filter((item) => item.id !== event.id)
       .filter((item) => item.category === event.category || getEventDistrict(item) === getEventDistrict(event))
       .slice(0, 3);
 
+    const versionSwitchHtml = change?.proposed && !change.rejectReason ? `
+      <div class="version-switch" role="group" aria-label="Versão do evento a mostrar">
+        <button type="button" data-review-version="atual" aria-pressed="${!showProposed}">Versão atual</button>
+        <button type="button" data-review-version="proposta" aria-pressed="${showProposed}">Versão proposta</button>
+      </div>` : '';
+    const diffHtml = change?.diff?.length ? `
+      <ul class="change-diff" aria-label="O que muda">
+        ${change.diff.map((item) => `<li><strong>${esc(item.label)}</strong><span class="from">${esc(String(item.from).slice(0, 160))}</span><span class="arrow" aria-hidden="true">→</span><span class="to">${esc(String(item.to).slice(0, 160))}</span></li>`).join('')}
+      </ul>` : '';
+
     detailRoot.innerHTML = `
-      <div class="event-detail-page">
+      <div class="event-detail-page" data-owner-view="${isOwner ? ownerView : ''}">
         <header class="topbar event-detail-topbar">
           <a class="topbar-brand" href="index.html" aria-label="Cultur'All início">
             <span>Cultur'</span><span>All</span>
@@ -1005,6 +1208,75 @@ document.addEventListener('DOMContentLoaded', () => {
             </a>
           </section>
 
+          ${isOwner ? `
+          <section class="owner-bar" aria-label="Opções do organizador">
+            <div class="owner-switch" role="group" aria-label="Escolher visão da página">
+              <span class="owner-switch-thumb" aria-hidden="true"></span>
+              <button type="button" data-owner-view="organizador" aria-pressed="${ownerView === 'organizador'}">Organizador</button>
+              <button type="button" data-owner-view="utilizador" aria-pressed="${ownerView === 'utilizador'}">Utilizador</button>
+            </div>
+            <p class="owner-bar-hint" id="ownerViewHint"></p>
+          </section>
+
+          <section class="owner-panel" id="ownerPanel" aria-label="Gestão do evento">
+            <div class="owner-panel-top">
+              <span class="organizer-badge ${ownerStatus === 'oculto' && ownRecord?.scheduledFor ? 'scheduled' : esc(ownerStatus)}">${esc(ownRecord?.statusLabel ?? 'Publicado')}</span>
+              <a class="event-detail-action primary owner-edit-btn" href="profile.html?edit=${encodeURIComponent(event.id)}">
+                <svg viewBox="0 0 24 24"><path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3Z"></path><path d="m13.5 6.5 3 3"></path></svg>
+                Editar evento
+              </a>
+            </div>
+            ${ownerStatus === 'pendente' ? `<p class="owner-note">Este evento está a aguardar aprovação dos administradores (pode demorar de 1 a 3 dias). Só depois fica visível na plataforma.</p>
+              <div class="owner-request-actions"><button type="button" class="owner-cancel-btn" data-owner-cancel="cancel_request">Cancelar pedido de aprovação</button></div>` : ''}
+            ${changeIsPending ? `<div class="owner-note owner-change-note">
+                <p><strong>Pedido de alteração em análise</strong> (1 a 3 dias). Enquanto isso, o público continua a ver a versão atual. Se voltares a editar, este pedido é substituído.</p>
+                ${versionSwitchHtml}${diffHtml}
+                <div class="owner-request-actions"><button type="button" class="owner-cancel-btn" data-owner-cancel="cancel_change">Cancelar pedido de alteração</button></div>
+              </div>` : ''}
+            ${change?.rejectReason ? `<div class="owner-note is-danger">
+                <p><strong>Alteração recusada:</strong> ${esc(change.rejectReason)} A versão atual mantém-se.</p>
+                <div class="owner-request-actions"><button type="button" class="owner-cancel-btn" data-owner-cancel="cancel_change">Dispensar aviso</button></div>
+              </div>` : ''}
+            ${ownerStatus === 'recusado' ? `<p class="owner-note is-danger">Este evento foi recusado${ownRecord?.rejectReason ? `: ${esc(ownRecord.rejectReason)}` : '.'} Edita-o para o voltar a submeter.</p>` : ''}
+            ${ownerStatus === 'oculto' ? `<p class="owner-note">Este evento está oculto${ownRecord?.scheduledFor ? ` e será publicado automaticamente em ${esc(formatApiDateLabel(ownRecord.scheduledFor))}` : ''}. Só tu o consegues ver.</p>` : ''}
+            ${ownerStatus === 'inativo' ? '<p class="owner-note">Este evento está inativo e não aparece na plataforma.</p>' : ''}
+            ${ownerIsLive || ownerStatus === 'oculto' || ownerStatus === 'inativo' ? `
+            <dl class="owner-stats" id="ownerStats" aria-label="Estatísticas do evento">
+              <div><dt>Visualizações</dt><dd data-stat="views">—</dd></div>
+              <div><dt>Cliques em bilhetes</dt><dd data-stat="clicks">—</dd></div>
+              <div><dt>Favoritos</dt><dd data-stat="favoritesNet">—</dd></div>
+              <div><dt>Partilhas</dt><dd data-stat="shares">—</dd></div>
+            </dl>` : ''}
+          </section>` : ''}
+
+          ${adminNeedsReview ? `
+          <section class="owner-panel admin-review-panel" id="adminReviewPanel" aria-label="Revisão do evento">
+            <div class="owner-panel-top">
+              <div>
+                <span class="organizer-badge ${esc(adminStatus)}">${esc(adminRecord.statusLabel ?? 'Pendente')}</span>
+                <strong class="admin-review-heading">Estás a rever este evento como administrador</strong>
+              </div>
+              <span class="owner-bar-hint">Organizador: ${esc(adminRecord.organizer || adminRecord.organizerEmail || '')}</span>
+            </div>
+            ${adminStatus === 'pendente' ? '<p class="owner-note">Evento novo, a aguardar aprovação. É assim que ficará na plataforma.</p>' : ''}
+            ${changeIsPending ? `<div class="owner-note owner-change-note">
+                <p><strong>Pedido de alteração.</strong> O evento já está publicado. ${showProposed ? 'Estás a ver a versão proposta.' : 'Estás a ver a versão atual.'}</p>
+                ${versionSwitchHtml}${diffHtml}
+              </div>` : ''}
+            <label class="admin-review-reason" id="adminReviewReasonWrap" hidden>
+              <span>Motivo da recusa (o organizador vai vê-lo)</span>
+              <textarea id="adminReviewReason" rows="2" maxlength="300" placeholder="Ex.: a descrição não corresponde ao evento."></textarea>
+            </label>
+            <div class="admin-review-buttons">
+              ${adminStatus === 'pendente' ? `
+                <button type="button" class="admin-approve-btn" data-review-action="approve">✓ Aprovar evento</button>
+                <button type="button" class="admin-reject-btn" data-review-action="reject">✕ Recusar evento</button>` : ''}
+              ${changeIsPending ? `
+                <button type="button" class="admin-approve-btn" data-review-action="approve_change">✓ Aprovar alteração</button>
+                <button type="button" class="admin-reject-btn" data-review-action="reject_change">✕ Recusar alteração</button>` : ''}
+            </div>
+          </section>` : ''}
+
           <section class="event-detail-head">
             <span class="event-pill" data-category="${esc(event.category)}">${esc(event.category)}</span>
             <h1>${esc(event.title)}</h1>
@@ -1019,7 +1291,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <section class="event-detail-content">
             <article class="event-detail-card event-detail-about">
               <h2>Sobre o Evento</h2>
-              <p>${esc(event.description || 'Descrição indisponível no momento. Este evento faz parte da seleção cultural da plataforma.')}</p>
+              <div class="event-description">${renderDescriptionHtml(event.description)}</div>
             </article>
 
             <aside class="event-detail-card event-detail-info">
@@ -1086,6 +1358,93 @@ document.addEventListener('DOMContentLoaded', () => {
         </nav>
       </div>
     `;
+
+    if (isOwner) {
+      const pageEl = detailRoot.querySelector('.event-detail-page');
+      const hintEl = document.getElementById('ownerViewHint');
+      const applyOwnerView = (view) => {
+        pageEl.dataset.ownerView = view;
+        detailRoot.querySelectorAll('[data-owner-view]').forEach((button) => {
+          if (button.tagName === 'BUTTON') {
+            button.setAttribute('aria-pressed', String(button.dataset.ownerView === view));
+          }
+        });
+        if (hintEl) {
+          hintEl.textContent = view === 'organizador'
+            ? 'Estás a ver a página como organizador, com as tuas ferramentas de gestão.'
+            : 'Estás a ver a página tal como os utilizadores a veem.';
+        }
+        try {
+          localStorage.setItem('culturall:ownerView', view);
+        } catch {
+          // Preferência não guardada.
+        }
+      };
+
+      detailRoot.querySelectorAll('button[data-owner-view]').forEach((button) => {
+        button.addEventListener('click', () => applyOwnerView(button.dataset.ownerView));
+      });
+      applyOwnerView(ownerView);
+
+      const ownerStatsEl = document.getElementById('ownerStats');
+      if (ownerStatsEl && isTrackableEventId(event.id)) {
+        void requestJson(`/api/analytics?eventId=${encodeURIComponent(event.id)}&granularity=year&from=2020-01-01`)
+          .then((response) => {
+            ownerStatsEl.querySelectorAll('[data-stat]').forEach((cell) => {
+              cell.textContent = String(Number(response.totals?.[cell.dataset.stat] ?? 0));
+            });
+          })
+          .catch(() => {
+            // Mantém os traços se as estatísticas não carregarem.
+          });
+      }
+    }
+
+    // Alternar entre versão atual e proposta (administrador e dono).
+    detailRoot.querySelectorAll('[data-review-version]').forEach((button) => {
+      button.addEventListener('click', () => {
+        eventReviewVersion = button.dataset.reviewVersion;
+        renderEventDetailPage();
+      });
+    });
+
+    detailRoot.querySelectorAll('[data-owner-cancel]').forEach((button) => {
+      button.addEventListener('click', () => {
+        void cancelOrganizerRequest(event.id, button.dataset.ownerCancel, () => window.location.reload());
+      });
+    });
+
+    if (adminNeedsReview) {
+      const reasonWrap = document.getElementById('adminReviewReasonWrap');
+      const reasonInput = document.getElementById('adminReviewReason');
+      let pendingReject = null;
+      detailRoot.querySelectorAll('[data-review-action]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const action = button.dataset.reviewAction;
+          const isReject = action === 'reject' || action === 'reject_change';
+          // Recusar pede primeiro o motivo; só o segundo clique confirma.
+          if (isReject && pendingReject !== action) {
+            pendingReject = action;
+            reasonWrap.hidden = false;
+            reasonInput.focus();
+            button.textContent = 'Confirmar recusa';
+            return;
+          }
+
+          button.disabled = true;
+          void requestJson('/api/admin/events', {
+            method: 'PATCH',
+            body: JSON.stringify({ eventId: Number(event.id), action, reason: reasonInput?.value.trim() ?? '' })
+          }).then(() => {
+            showToast(action.startsWith('approve') ? 'Aprovado.' : 'Recusado.');
+            window.setTimeout(() => { window.location.href = 'profile.html?tab=moderation'; }, 600);
+          }).catch((error) => {
+            button.disabled = false;
+            showToast(error instanceof Error ? error.message : 'Não foi possível concluir a ação.');
+          });
+        });
+      });
+    }
 
     const eventDetailFavoriteBtn = document.getElementById('eventDetailFavoriteBtn');
     if (eventDetailFavoriteBtn) {
@@ -1231,6 +1590,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // Mostra já a imagem principal e completa o carrossel com as restantes imagens do evento.
     renderEventGallery(event, event.image && event.image !== defaultEventImage ? [event.image] : []);
 
+    // Versão proposta: as imagens novas ainda não estão guardadas, vêm no próprio pedido.
+    if (Array.isArray(event.images) && event.images.length > 0) {
+      renderEventGallery(event, event.images);
+      return;
+    }
+
     const numericId = Number(event.id);
     if (event.isDemo || !Number.isFinite(numericId)) {
       return;
@@ -1365,6 +1730,12 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
+      const editButton = target.closest('[data-edit-event]');
+      if (editButton) {
+        window.location.href = `profile.html?edit=${encodeURIComponent(editButton.dataset.editEvent)}`;
+        return;
+      }
+
       const shareButton = target.closest('.share-btn');
       if (shareButton) {
         const eventId = shareButton.dataset.eventId;
@@ -1463,6 +1834,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const sortFilter = document.getElementById('sortFilter');
     const locationFilter = document.getElementById('locationFilter');
     const priceFilter = document.getElementById('priceFilter');
+    const ownEventsGroup = document.getElementById('ownEventsGroup');
+    const ownEventsToggle = document.getElementById('ownEventsToggle');
     const loginToggleBtn = document.getElementById('loginToggleBtn');
     const accountChip = document.getElementById('accountChip');
     const filtersShell = document.getElementById('filtersShell');
@@ -1634,6 +2007,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const selectedDate = activeDateFilter;
       const selectedLocation = locationFilter?.value ?? 'Todos';
       const selectedPrice = priceFilter?.value ?? 'Todos';
+      const ownOnly = Boolean(ownEventsToggle?.checked);
       const currentSort = getCurrentSort();
       const userLocation = getUserLocation();
 
@@ -1650,7 +2024,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const matchesDate = matchesDateFilter(event, selectedDate);
         const matchesLocation = selectedLocation === 'Todos' || getEventDistrict(event) === selectedLocation;
         const matchesPrice = selectedPrice === 'Todos' || event.priceType === selectedPrice;
-        return matchesQuery && matchesCategory && matchesDate && matchesLocation && matchesPrice;
+        const matchesOwner = !ownOnly || isOwnEvent(event);
+        return matchesQuery && matchesCategory && matchesDate && matchesLocation && matchesPrice && matchesOwner;
       }).sort((firstEvent, secondEvent) => {
         if (currentSort === 'date') {
           return compareEventsByDate(firstEvent, secondEvent);
@@ -1705,7 +2080,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
     rerenderListingPage = renderCards;
 
-    [searchInput, categoryFilter, dateFilter, locationFilter, priceFilter].forEach((element) => {
+    // Organizador com sessão: caixa para ver só os eventos publicados por si (a preferência fica guardada neste browser).
+    if (ownEventsGroup && ownEventsToggle && session?.accountType === 'organizador') {
+      ownEventsGroup.hidden = false;
+      try {
+        ownEventsToggle.checked = localStorage.getItem('culturall:ownOnly') === '1';
+      } catch {
+        // Sem localStorage, começa desligado.
+      }
+
+      ownEventsToggle.addEventListener('change', () => {
+        try {
+          localStorage.setItem('culturall:ownOnly', ownEventsToggle.checked ? '1' : '0');
+        } catch {
+          // Preferência não guardada.
+        }
+      });
+    }
+
+    [searchInput, categoryFilter, dateFilter, locationFilter, priceFilter, ownEventsToggle].forEach((element) => {
       if (!element) {
         return;
       }
@@ -2624,6 +3017,10 @@ document.addEventListener('DOMContentLoaded', () => {
           <button class="admin-modal-x" type="button" data-admin-event-close aria-label="Fechar">×</button>
           <h2 id="adminEventActionModalTitle">Gerir evento?</h2>
           <p id="adminEventActionModalText"></p>
+          <label class="admin-modal-reason" id="adminEventActionReasonWrap" hidden>
+            <span>Motivo (o organizador vai vê-lo)</span>
+            <textarea id="adminEventActionReason" rows="3" maxlength="300" placeholder="Ex.: a descrição não corresponde ao evento."></textarea>
+          </label>
           <div class="admin-modal-actions">
             <button class="admin-modal-secondary" type="button" data-admin-event-close>Cancelar</button>
             <button class="admin-modal-primary danger" type="button" id="adminEventActionConfirmBtn">Confirmar</button>
@@ -2859,6 +3256,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const adminEventActionModalTitle = adminEventActionModal.querySelector('#adminEventActionModalTitle');
       const adminEventActionModalText = adminEventActionModal.querySelector('#adminEventActionModalText');
       const adminEventActionConfirmBtn = adminEventActionModal.querySelector('#adminEventActionConfirmBtn');
+      const adminEventActionReasonWrap = adminEventActionModal.querySelector('#adminEventActionReasonWrap');
+      const adminEventActionReason = adminEventActionModal.querySelector('#adminEventActionReason');
       const adminPendingEventsContainer = profileRoot.querySelector('[data-admin-pending-events]');
       const adminPublishedEventsTableBody = profileRoot.querySelector('[data-admin-published-events]');
       const adminOrganizerAvatar = adminOrganizerProfileModal.querySelector('#adminOrganizerAvatar');
@@ -2901,12 +3300,34 @@ document.addEventListener('DOMContentLoaded', () => {
                     <p>Submetido em: ${esc(event.submittedAt || 'Pendente')}</p>
                   </div>
                   <div class="admin-review-actions">
+                    <a class="admin-view-btn" href="event.html?id=${encodeURIComponent(event.id)}&src=admin">Ver página</a>
                     <button type="button" class="admin-approve-btn" data-admin-event-action="approve" data-admin-event-id="${event.id}">✓ Aprovar</button>
                     <button type="button" class="admin-reject-btn" data-admin-event-action="reject" data-admin-event-id="${event.id}">✕ Recusar</button>
                   </div>
                 </article>
               `).join('')
             : '<div class="admin-empty-state">Não existem eventos pendentes de aprovação.</div>';
+
+          const changeRequests = adminEventsState.items.filter((event) => event.hasPendingChange);
+          if (changeRequests.length > 0) {
+            adminPendingEventsContainer.insertAdjacentHTML('beforeend', `
+              <h3 class="admin-review-subtitle">Pedidos de alteração (${changeRequests.length})</h3>
+              ${changeRequests.map((event) => `
+                <article class="admin-review-item">
+                  <div>
+                    <strong>${esc(event.title)}</strong>
+                    <p>Evento já publicado: o organizador pediu alterações. A versão atual mantém-se até decidires.</p>
+                    <p>Organizador: ${esc(event.organizerName ?? event.organizerEmail ?? 'Organizador')}</p>
+                  </div>
+                  <div class="admin-review-actions">
+                    <a class="admin-view-btn" href="event.html?id=${encodeURIComponent(event.id)}&src=admin">Ver alterações</a>
+                    <button type="button" class="admin-approve-btn" data-admin-event-action="approve_change" data-admin-event-id="${event.id}">✓ Aprovar</button>
+                    <button type="button" class="admin-reject-btn" data-admin-event-action="reject_change" data-admin-event-id="${event.id}">✕ Recusar</button>
+                  </div>
+                </article>
+              `).join('')}
+            `);
+          }
         }
 
         if (adminPublishedEventsTableBody) {
@@ -2929,6 +3350,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <td><span class="admin-pill ${status === 'hidden' || status === 'pending' ? 'warning' : 'success'}">${normalizeAdminEventStatusLabel(status)}</span></td>
                     <td>
                       <div class="admin-actions-group">
+                        <a class="admin-icon-btn" aria-label="Ver página do evento" href="event.html?id=${encodeURIComponent(event.id)}&src=admin"><svg viewBox="0 0 24 24"><path d="M14 4h6v6"></path><path d="M20 4l-9 9"></path><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"></path></svg></a>
                         <button type="button" class="admin-icon-btn" aria-label="${toggleLabel}" data-admin-event-action="${toggleAction}" data-admin-event-id="${event.id}">${toggleIcon}</button>
                         <button type="button" class="admin-icon-btn danger" aria-label="Eliminar evento" data-admin-event-action="delete" data-admin-event-id="${event.id}"><svg viewBox="0 0 24 24"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M6 7l1 13h10l1-13"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg></button>
                       </div>
@@ -2988,14 +3410,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
         selectedAdminEventId = eventId;
         selectedAdminEventAction = action;
+        if (adminEventActionReasonWrap) {
+          adminEventActionReasonWrap.hidden = !['reject', 'reject_change'].includes(action);
+          if (adminEventActionReason) {
+            adminEventActionReason.value = '';
+          }
+        }
 
-        if (action === 'approve') {
+        if (action === 'approve_change') {
+          adminEventActionModalTitle.textContent = 'Aprovar alteração?';
+          adminEventActionModalText.textContent = `As alterações pedidas ao evento ${event.title} passam a ser públicas.`;
+          adminEventActionConfirmBtn.textContent = 'Sim, aprovar alteração';
+        } else if (action === 'reject_change') {
+          adminEventActionModalTitle.textContent = 'Recusar alteração?';
+          adminEventActionModalText.textContent = `O evento ${event.title} mantém a versão atual e o organizador é informado do motivo.`;
+          adminEventActionConfirmBtn.textContent = 'Sim, recusar alteração';
+        } else if (action === 'approve') {
           adminEventActionModalTitle.textContent = 'Aprovar evento?';
           adminEventActionModalText.textContent = `Pretendes aprovar o evento ${event.title} para que fique visível na home?`;
           adminEventActionConfirmBtn.textContent = 'Sim, aprovar';
         } else if (action === 'reject') {
           adminEventActionModalTitle.textContent = 'Recusar evento?';
-          adminEventActionModalText.textContent = `Pretendes recusar o evento ${event.title}? Ele será removido da moderação.`;
+          adminEventActionModalText.textContent = `Pretendes recusar o evento ${event.title}? O organizador vê o motivo e pode corrigi-lo e voltar a submeter.`;
           adminEventActionConfirmBtn.textContent = 'Sim, recusar';
         } else if (action === 'hide') {
           adminEventActionModalTitle.textContent = 'Ocultar evento?';
@@ -3099,7 +3535,8 @@ document.addEventListener('DOMContentLoaded', () => {
               method: 'PATCH',
               body: JSON.stringify({
                 eventId: Number(selectedAdminEventId),
-                action: selectedAdminEventAction
+                action: selectedAdminEventAction,
+                reason: adminEventActionReason?.value.trim() ?? ''
               })
             });
 
@@ -3349,6 +3786,12 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       });
 
+      // Vindo do sino de notificações: abre logo a secção com o que está pendente.
+      const requestedAdminTab = new URL(window.location.href).searchParams.get('tab');
+      if (requestedAdminTab && tabButtons.some((button) => button.dataset.adminTab === requestedAdminTab)) {
+        setAdminTab(requestedAdminTab);
+      }
+
       return;
     }
 
@@ -3386,7 +3829,11 @@ document.addEventListener('DOMContentLoaded', () => {
             <td>${esc(event.category)}</td>
             <td>${esc(event.date ?? event.dateLabel ?? '')}</td>
             <td>${esc(event.location)}</td>
-            <td><span class="organizer-badge ${event.scheduledFor ? 'scheduled' : esc(event.status ?? 'published')}">${esc(event.statusLabel ?? 'Publicado')}</span></td>
+            <td>
+              <span class="organizer-badge ${event.scheduledFor && event.status === 'oculto' ? 'scheduled' : esc(event.status ?? 'published')}">${esc(event.statusLabel ?? 'Publicado')}</span>
+              ${event.hasPendingChange ? '<span class="organizer-badge pendente" title="A versão atual mantém-se até à aprovação">Alteração pendente</span>' : ''}
+              ${event.changeRejectReason ? `<span class="organizer-badge recusado" title="${esc(event.changeRejectReason)}">Alteração recusada</span>` : ''}
+            </td>
             <td><span class="organizer-metric"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"></path></svg>${Number(event.views ?? 0)}</span></td>
             <td>
               <div class="organizer-actions-cell" aria-label="Ações do evento">
@@ -3396,6 +3843,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 <button type="button" class="icon-btn" data-organizer-event-id="${esc(event.id)}" data-organizer-event-action="edit" aria-label="Editar evento">
                   <svg viewBox="0 0 24 24"><path d="M4 20h4l10-10a2.5 2.5 0 0 0-4-4L4 16v4Z"></path></svg>
                 </button>
+                ${event.status === 'pendente' ? `<button type="button" class="text-btn" data-organizer-event-id="${esc(event.id)}" data-organizer-event-action="cancel-request">Cancelar pedido de aprovação</button>` : ''}
+                ${event.hasPendingChange ? `<button type="button" class="text-btn" data-organizer-event-id="${esc(event.id)}" data-organizer-event-action="cancel-change">Cancelar pedido de alteração</button>` : ''}
+                ${event.changeRejectReason ? `<button type="button" class="text-btn" data-organizer-event-id="${esc(event.id)}" data-organizer-event-action="cancel-change">Dispensar aviso</button>` : ''}
                 <button type="button" class="icon-btn" data-organizer-event-id="${esc(event.id)}" data-organizer-event-action="manage" aria-label="Gerir evento">
                   <svg viewBox="0 0 24 24"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M6 7l1 13h10l1-13"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg>
                 </button>
@@ -3511,6 +3961,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (action === 'manage') {
           openOrganizerEventAction(eventId);
           return;
+        }
+
+        if (action === 'cancel-request' || action === 'cancel-change') {
+          void cancelOrganizerRequest(eventId, action === 'cancel-request' ? 'cancel_request' : 'cancel_change', refreshOrganizerEvents);
         }
       });
 
@@ -3719,11 +4173,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="organizer-visibility-options" role="radiogroup" aria-label="Visibilidade do evento">
                   <label class="organizer-visibility-option">
                     <input type="radio" name="organizerVisibility" value="publish" checked />
-                    <span><strong>Publicar</strong><small>Visível para todos assim que guardares.</small></span>
+                    <span><strong>Publicar</strong><small>Vai para aprovação da equipa e fica visível para todos depois de aprovado.</small></span>
                   </label>
                   <label class="organizer-visibility-option">
                     <input type="radio" name="organizerVisibility" value="schedule" />
-                    <span><strong>Agendar</strong><small>Fica oculto e é publicado automaticamente na data escolhida.</small></span>
+                    <span><strong>Agendar</strong><small>Depois de aprovado, fica oculto e é publicado automaticamente na data escolhida.</small></span>
                   </label>
                   <label class="organizer-visibility-option">
                     <input type="radio" name="organizerVisibility" value="hide" />
@@ -3741,8 +4195,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 <textarea id="organizerEventDescription" rows="5" placeholder="Escreve uma descrição curta do evento (programa, artistas, público-alvo, etc.)"></textarea>
               </label>
 
+              <p class="organizer-approval-notice" id="organizerApprovalNotice" role="note">
+                <strong>Aprovação necessária.</strong> Todos os eventos são revistos pela equipa Cultur'All antes de aparecerem na plataforma. A aprovação pode demorar de 1 a 3 dias.
+              </p>
+
               <div class="organizer-create-actions">
-                <button class="organizer-create-submit" id="organizerCreateSubmitBtn" type="submit">Publicar evento</button>
+                <button class="organizer-create-submit" id="organizerCreateSubmitBtn" type="submit">Enviar para aprovação</button>
                 <button class="organizer-create-cancel" type="button" id="organizerCreateCancelBtn">Cancelar</button>
               </div>
 
@@ -4140,9 +4598,21 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (organizerCreateSubmitBtn) {
           const editing = Boolean(editingOrganizerEventIdRef.value);
-          organizerCreateSubmitBtn.textContent = visibility === 'hide'
-            ? (editing ? 'Guardar alterações (oculto)' : 'Guardar como oculto')
-            : `${visibility === 'schedule' ? 'Agendar' : 'Publicar'} ${editing ? 'alterações' : 'evento'}`;
+          // Eventos já aprovados continuam a poder ser publicados/agendados diretamente; os restantes vão para aprovação.
+          const editingApproved = Boolean(editing && editingOrganizerEventIdRef.approved);
+          const needsApproval = !editingApproved;
+          organizerCreateSubmitBtn.textContent = editingApproved
+            ? 'Enviar alterações para aprovação'
+            : visibility === 'hide'
+              ? (editing ? 'Guardar alterações (oculto)' : 'Guardar como oculto')
+              : (visibility === 'schedule' ? 'Enviar para aprovação (agendado)' : 'Enviar para aprovação');
+          const approvalNotice = document.getElementById('organizerApprovalNotice');
+          if (approvalNotice) {
+            approvalNotice.hidden = !editingApproved && (visibility === 'hide' || !needsApproval);
+            approvalNotice.innerHTML = editingApproved
+              ? "<strong>Alterações sujeitas a aprovação.</strong> A versão atual do evento continua visível até a equipa Cultur'All aprovar as mudanças (1 a 3 dias). Podes cancelar o pedido quando quiseres."
+              : "<strong>Aprovação necessária.</strong> Todos os eventos são revistos pela equipa Cultur'All antes de aparecerem na plataforma. A aprovação pode demorar de 1 a 3 dias.";
+          }
         }
       }
       const editingOrganizerEventIdRef = { value: null };
@@ -4152,6 +4622,7 @@ document.addEventListener('DOMContentLoaded', () => {
       organizerCreateForm?.addEventListener('reset', () => {
         setTimeout(() => {
           editingOrganizerEventIdRef.value = null;
+          editingOrganizerEventIdRef.approved = false;
           updateOrganizerVisibilityUi();
         }, 0);
       });
@@ -4162,6 +4633,7 @@ document.addEventListener('DOMContentLoaded', () => {
         openOrganizerEdit = (eventObj) => {
           editingOrganizerEventId = String(eventObj.id ?? '');
           editingOrganizerEventIdRef.value = editingOrganizerEventId;
+          editingOrganizerEventIdRef.approved = Boolean(eventObj.approvedAt);
           organizerEventTitle.value = eventObj.title ?? '';
           organizerEventCategory.value = eventObj.category ?? 'Outros';
           if (eventObj.isRecurring) {
@@ -4341,6 +4813,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
           }
 
+          let saveResponse = null;
+
           // A imagem principal vai primeiro (a API guarda a primeira como capa e as restantes como galeria).
           const imagePayload = [
             ...organizerImages.filter((image) => image.id === organizerMainImageId),
@@ -4349,7 +4823,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
           try {
             if (editingOrganizerEventId) {
-              await requestJson('/api/events', {
+              saveResponse = await requestJson('/api/events', {
                 method: 'PATCH',
                 body: JSON.stringify({
                   action: 'update',
@@ -4373,7 +4847,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 })
               });
             } else {
-              await requestJson('/api/events', {
+              saveResponse = await requestJson('/api/events', {
                 method: 'POST',
                 body: JSON.stringify({
                   title,
@@ -4405,7 +4879,11 @@ document.addEventListener('DOMContentLoaded', () => {
           }
 
           if (organizerCreateMessage) {
-            organizerCreateMessage.textContent = visibility === 'schedule'
+            organizerCreateMessage.textContent = saveResponse?.changeRequested
+              ? saveResponse.message
+              : saveResponse?.status === 'pendente'
+              ? `Evento enviado para aprovação. A aprovação pode demorar de 1 a 3 dias; só depois fica visível na plataforma${visibility === 'schedule' ? ' (na data agendada)' : ''}.`
+              : visibility === 'schedule'
               ? `Evento agendado para ${new Date(organizerPublishAt.value).toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' })}.`
               : visibility === 'hide'
                 ? 'Evento guardado como oculto. Podes publicá-lo quando quiseres.'
@@ -4415,6 +4893,7 @@ document.addEventListener('DOMContentLoaded', () => {
           organizerCreateForm.reset();
           editingOrganizerEventId = null;
           editingOrganizerEventIdRef.value = null;
+          editingOrganizerEventIdRef.approved = false;
           if (organizerEventPriceType) {
             organizerEventPriceType.value = 'Pago';
           }
@@ -4488,6 +4967,18 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       updateOrganizerCreateVisibility();
+
+      // Vindo da página do evento ("Editar evento"): abre logo o formulário de edição desse evento.
+      const editRequestId = new URL(window.location.href).searchParams.get('edit');
+      if (editRequestId) {
+        const editTarget = organizerEventsState.items.find((item) => String(item.id) === String(editRequestId));
+        if (editTarget) {
+          setOrganizerTab('management');
+          openOrganizerEdit?.(editTarget);
+          organizerCreatePanel?.scrollIntoView({ block: 'start' });
+        }
+      }
+
       void refreshOrganizerEvents();
 
       return;
@@ -4529,6 +5020,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (pageType === 'event') {
+      const reviewId = new URL(window.location.href).searchParams.get('id');
+      if (reviewId && ['admin', 'organizador'].includes(session?.accountType)) {
+        try {
+          eventReviewState = await requestJson(`/api/event-review?id=${encodeURIComponent(reviewId)}`);
+        } catch {
+          eventReviewState = null;
+        }
+      }
+
       renderEventDetailPage();
       renderLoginPage();
       return;

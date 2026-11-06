@@ -57,3 +57,24 @@ SELECT 'visualizacao', v.evvidevento, v.evvidutilizador, CONCAT('legacy-', v.ide
   JOIN categoria c ON c.idcategoria = e.evidcategoria
   JOIN localizacao l ON l.idlocalizacao = e.evidlocalizacao
  WHERE NOT EXISTS (SELECT 1 FROM eventointeracao i WHERE i.evisessao = CONCAT('legacy-', v.ideventovisualizacao));
+
+-- 5) Aprovação obrigatória de eventos (2026-11-06) -------------------------
+-- Eventos criados antes desta regra e já visíveis/ocultos contam como aprovados. Os novos eventos dos organizadores
+-- ficam 'pendente' até um administrador os aprovar. (Idempotente; o limite de data evita aprovar rascunhos novos.)
+UPDATE evento SET evdataaprovacao = COALESCE(evdatapublicacao, evdatasubmissao)
+ WHERE evdataaprovacao IS NULL AND evestado IN ('publicado','ativo','oculto','inativo')
+   AND evdatasubmissao < '2026-11-07 00:00:00';
+
+-- 6) Pedidos de alteração de eventos (2026-11-06) -----------------------------
+-- Quando um organizador edita um evento já aprovado, a versão pública mantém-se e as alterações ficam aqui
+-- até um administrador as aprovar. aldados = JSON com os campos validados e as imagens novas; almotivo preenchido
+-- = alteração recusada (o organizador vê o motivo). Sem chave estrangeira (limpo explicitamente ao apagar eventos).
+CREATE TABLE IF NOT EXISTS eventoalteracao (
+    idalteracao INT NOT NULL AUTO_INCREMENT,
+    alidevento INT NOT NULL,
+    aldados LONGTEXT NOT NULL,
+    aldata DATETIME NOT NULL,
+    almotivo VARCHAR(300) NULL,
+    PRIMARY KEY (idalteracao),
+    UNIQUE KEY uq_al_evento (alidevento)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

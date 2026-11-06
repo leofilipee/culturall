@@ -124,3 +124,20 @@ Origem: `CulturAll-melhorado.zip` aplicado sobre o projeto online (Vercel + TiDB
 ## Backend / BD
 - Nova tabela `eventointeracao` (migração `bdd/Migration_2026_11_04_analytics.sql`, também aplicada automaticamente), novas colunas (publicação, coordenadas, favdata, perfil do organizador), links de bilhetes até 2048 caracteres.
 - Validação no servidor (títulos, datas, preço, URLs http/https, categorias e distritos), escape de HTML no front-end e capas servidas por `/api/event-cover`.
+
+## Fase 5 — Edição, aprovação e notificações
+
+- **Aprovação obrigatória:** um evento criado (ou agendado) por um organizador fica `pendente` e só entra na plataforma depois de um administrador o aprovar. O organizador vê o aviso "a aprovação pode demorar de 1 a 3 dias". Eventos anteriores a 2026-11-07 são tratados como já aprovados (migração, secção 5 de `bdd/Migration_2026_11_04_analytics.sql`; corre-se sozinha no arranque da API).
+- **Editar evento:** botão de lápis nos cartões dos próprios eventos e botão "Editar evento" na página do evento (abre `profile.html?edit=ID` já com o formulário preenchido).
+- **Visão Organizador / Utilizador:** na página de um evento do próprio organizador há um interruptor. Na visão de organizador aparece o estado do evento, avisos e estatísticas; na de utilizador vê-se a página como o público. As visitas do organizador não contam nas estatísticas. O organizador também abre os seus eventos pendentes/ocultos.
+- **"Só os meus eventos":** interruptor nos filtros da página inicial (só para organizadores; a preferência fica guardada no browser).
+- **Descrição:** parágrafos e quebras de linha são respeitados; primeiro parágrafo destacado.
+- **Sino do administrador:** na barra de topo, com contador de eventos por aprovar e contas de organizador por validar (`GET /api/admin/notifications`); atualiza a cada minuto e após ações de administração.
+- **Galeria:** sombra suave por trás das imagens em vez do contorno escuro.
+
+### Fase 5b — Alterações sujeitas a aprovação e revisão pelo administrador
+
+- **Editar um evento já aprovado gera um "pedido de alteração":** a versão pública mantém-se até um administrador aprovar (tabela nova `eventoalteracao`, criada sozinha pela API e na secção 6 da migração). Publicar/agendar/ocultar continua imediato; só o conteúdo (título, descrição, datas, preço, local, imagens…) espera aprovação. Editar de novo substitui o pedido anterior.
+- **Cancelar:** "Cancelar pedido de aprovação" (evento novo pendente → fica oculto) e "Cancelar pedido de alteração" (descarta as mudanças), na tabela do organizador e na página do evento. Se o administrador recusar uma alteração, o organizador vê o motivo e pode dispensar o aviso.
+- **Revisão pelo administrador na página do evento:** `event.html?id=ID` abre para o administrador mesmo com o evento pendente. Mostra o evento tal como ficará, com botões Aprovar/Recusar (recusa pede motivo), e nos pedidos de alteração a lista do que muda e um interruptor "Versão atual / Versão proposta". A lista de moderação e o sino têm ligações diretas para essas páginas. Visitas e cliques de administradores/donos não contam nas estatísticas.
+- `GET /api/event-review?id=` (admin ou dono) e ações `approve_change`, `reject_change` (admin), `cancel_change`, `cancel_request` (organizador).
