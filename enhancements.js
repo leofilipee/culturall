@@ -139,9 +139,17 @@ document.addEventListener('DOMContentLoaded', () => {
     initHome();
   }
 
-  if (pageType === 'event' || pageType === 'profile') {
+  // Sugestões da pesquisa em todas as páginas; a página inicial tem as suas, ligadas à lista que já carregou.
+  if (pageType !== 'home') {
     initGlobalSearch();
   }
+
+  // Clicar numa sugestão não pode tirar o foco ao campo (senão a caixa fecha antes do clique chegar à ligação).
+  document.addEventListener('mousedown', (event) => {
+    if (event.target instanceof Element && event.target.closest('.search-wrap .search-suggestions, .search-wrap #searchSuggestions')) {
+      event.preventDefault();
+    }
+  });
 
   // Células cortadas com "…" mostram o texto completo ao passar o rato.
   document.addEventListener('mouseover', (event) => {
@@ -266,17 +274,14 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (event.key === 'Enter') {
+        if (pageType === 'favorites') {
+          return; // nos favoritos o campo também filtra a própria lista
+        }
+
         event.preventDefault();
         window.location.href = searchUrl(event.target.value.trim());
       } else if (event.key === 'Escape') {
         boxFor(event.target).hidden = true;
-      }
-    });
-
-    // Clicar numa sugestão não pode tirar o foco ao campo (senão a caixa fecha antes do clique chegar à ligação).
-    document.addEventListener('mousedown', (event) => {
-      if (event.target instanceof Element && event.target.closest('.search-wrap .search-suggestions')) {
-        event.preventDefault();
       }
     });
 
@@ -820,7 +825,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     searchInput?.addEventListener('input', renderSuggestions);
     searchInput?.addEventListener('focus', renderSuggestions);
-    searchInput?.addEventListener('blur', () => setTimeout(closeSuggestions, 150));
+    searchInput?.addEventListener('blur', () => setTimeout(closeSuggestions, 250));
     searchInput?.addEventListener('keydown', (event) => {
       if (!suggestions || suggestions.hidden) {
         return;
