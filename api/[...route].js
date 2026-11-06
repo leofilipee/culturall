@@ -1004,6 +1004,24 @@ async function handler(req, res) {
       setSession(res, user); return json(res, 201, { ok: true, message: 'Conta criada com sucesso.', user });
     } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
   }
+  // Sugestões da barra de pesquisa: leve e rápida (no máximo 5 eventos futuros), para não descarregar a lista toda.
+  if (route === 'search' && req.method === 'GET') {
+    const q = String(queryParam(req, 'q') || '').trim().slice(0, 80);
+    if (!q) return json(res, 200, { ok: true, events: [] });
+    const like = `%${q.replace(/[\\%_]/g, '\\$&')}%`;
+    const [rows] = await db.query(`SELECT e.idevento, e.evtitulo, e.evdatainicio, e.evrecorrente, c.catnome, l.loccidade,
+        (SELECT img.idimagem FROM imagem img WHERE img.imgidevento=e.idevento AND img.imgtipo='capa' ORDER BY img.idimagem LIMIT 1) AS capa_id
+      FROM evento e JOIN categoria c ON c.idcategoria=e.evidcategoria JOIN localizacao l ON l.idlocalizacao=e.evidlocalizacao
+      WHERE e.evestado IN ('publicado','ativo') AND NOT ${ENDED_SQL}
+        AND (e.evtitulo LIKE ? OR c.catnome LIKE ? OR l.loccidade LIKE ? OR l.locmorada LIKE ?)
+      ORDER BY (e.evtitulo LIKE ?) DESC, e.evdatainicio ASC LIMIT 5`, [lisbonTimestamp(), like, like, like, like, `${like.slice(1)}`]);
+    res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=30');
+    return json(res, 200, { ok: true, events: rows.map((row) => ({
+      id: Number(row.idevento), title: row.evtitulo, category: row.catnome, city: row.loccidade || '',
+      dateLabel: row.evrecorrente ? 'Evento recorrente' : new Date(row.evdatainicio).toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' }),
+      image: row.capa_id ? `/api/event-cover?id=${Number(row.idevento)}&v=${Number(row.capa_id)}` : ''
+    })) });
+  }
   if (route === 'events') {
     const user = currentUser(req);
     if (req.method === 'GET') {

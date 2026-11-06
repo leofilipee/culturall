@@ -190,32 +190,27 @@ document.addEventListener('DOMContentLoaded', () => {
       return box;
     };
 
-    // Lista de eventos futuros, pedida uma vez (estas páginas não a carregam toda).
-    let eventsPromise = null;
-    const loadEvents = () => {
-      if (!eventsPromise) {
-        eventsPromise = fetch('/api/events?status=published', { credentials: 'same-origin' })
-          .then((response) => (response.ok ? response.json() : { events: [] }))
-          .then((data) => (Array.isArray(data.events) ? data.events : []))
-          .then((events) => {
-            const now = Date.now();
-            const today = new Date().toLocaleDateString('sv-SE');
-            return events.filter((item) => {
-              if (item.isRecurring) {
-                return true;
-              }
-
-              const end = item.endDate ? new Date(item.endDate).getTime() : NaN;
-              return Number.isNaN(end) ? new Date(item.startDate || item.eventDate).toLocaleDateString('sv-SE') >= today : end >= now;
-            });
-          })
-          .catch(() => []);
+    // Sugestões pedidas ao servidor (leve: no máximo 5 eventos), com um pequeno atraso para não pedir a cada letra.
+    const cache = new Map();
+    const fetchMatches = (query, signal) => {
+      const key = query.toLowerCase();
+      if (cache.has(key)) {
+        return Promise.resolve(cache.get(key));
       }
 
-      return eventsPromise;
+      return fetch(`/api/search?q=${encodeURIComponent(query)}`, { credentials: 'same-origin', signal })
+        .then((response) => (response.ok ? response.json() : { events: [] }))
+        .then((data) => {
+          const list = Array.isArray(data.events) ? data.events : [];
+          cache.set(key, list);
+          return list;
+        });
     };
 
-    document.addEventListener('input', async (event) => {
+    let timer = null;
+    let controller = null;
+
+    document.addEventListener('input', (event) => {
       if (!isSearchInput(event.target)) {
         return;
       }
@@ -223,33 +218,46 @@ document.addEventListener('DOMContentLoaded', () => {
       const input = event.target;
       const box = boxFor(input);
       const query = input.value.trim();
+      clearTimeout(timer);
+      controller?.abort();
       if (!query) {
         box.hidden = true;
         return;
       }
 
-      const needle = query.toLowerCase();
-      const events = await loadEvents();
-      if (input.value.trim() !== query) {
-        return; // a pesquisa mudou entretanto
+      const searchRow = (matches) => `<a class="suggestion suggestion-search" href="${searchUrl(query)}"><span><strong>Ver todos os resultados para “${escapeHtml(query)}”</strong><small>${matches ? 'Abrir a lista completa' : 'Procurar na página inicial'}</small></span></a>`;
+      if (!cache.has(query.toLowerCase())) {
+        box.innerHTML = `<p class="suggestion-heading">A procurar…</p>${searchRow(false)}`;
+        box.hidden = false;
       }
 
-      const matches = events
-        .filter((item) => [item.title, item.category, item.city, item.location].join(' ').toLowerCase().includes(needle))
-        .sort((a, b) => Number(b.views || 0) - Number(a.views || 0))
-        .slice(0, 5);
+      timer = setTimeout(async () => {
+        controller = new AbortController();
+        let matches = [];
+        try {
+          matches = await fetchMatches(query, controller.signal);
+        } catch (error) {
+          if (error?.name === 'AbortError') {
+            return;
+          }
+        }
 
-      box.innerHTML = (matches.length ? '<p class="suggestion-heading">Sugestões</p>' : '')
-        + matches.map((item) => `
+        if (input.value.trim() !== query) {
+          return; // a pesquisa mudou entretanto
+        }
+
+        box.innerHTML = (matches.length ? '<p class="suggestion-heading">Sugestões</p>' : '')
+          + matches.map((item) => `
           <a class="suggestion" role="option" href="event.html?id=${encodeURIComponent(item.id)}&src=pesquisa">
             ${item.image ? `<img src="${escapeHtml(item.image)}" alt="" />` : ''}
             <span>
               <strong>${escapeHtml(item.title)}</strong>
-              <small>${categoryIcons[item.category] ?? ''} ${escapeHtml(item.category)} · ${escapeHtml(item.dateLabel || '')} · ${escapeHtml(item.city || item.location || '')}</small>
+              <small>${categoryIcons[item.category] ?? ''} ${escapeHtml(item.category)} · ${escapeHtml(item.dateLabel || '')} · ${escapeHtml(item.city || '')}</small>
             </span>
           </a>`).join('')
-        + `<a class="suggestion suggestion-search" href="${searchUrl(query)}"><span><strong>Ver todos os resultados para “${escapeHtml(query)}”</strong><small>${matches.length ? 'Abrir a lista completa' : 'Nenhuma sugestão direta, procurar na página inicial'}</small></span></a>`;
-      box.hidden = false;
+          + searchRow(matches.length > 0);
+        box.hidden = false;
+      }, 120);
     });
 
     document.addEventListener('keydown', (event) => {
