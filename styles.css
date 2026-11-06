@@ -982,38 +982,6 @@ select {
   letter-spacing: -0.05em;
 }
 
-.auth-switch {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  padding: 6px;
-  margin-bottom: 18px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.46);
-  border: 1px solid rgba(114, 90, 67, 0.1);
-}
-
-.auth-switch-btn {
-  height: 42px;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--muted);
-  font-weight: 800;
-  cursor: pointer;
-  transition: background 180ms ease, color 180ms ease, transform 180ms ease;
-}
-
-.auth-switch-btn.active {
-  background: linear-gradient(180deg, #d3492a, #bf3c21);
-  color: #fff;
-  box-shadow: 0 10px 22px rgba(191, 60, 33, 0.18);
-}
-
-.auth-switch-btn:hover {
-  transform: translateY(-1px);
-}
-
 .auth-subtitle {
   margin: 8px 0 24px;
   text-align: center;
@@ -1192,34 +1160,6 @@ select {
   color: var(--brand);
   font-size: 0.98rem;
   cursor: pointer;
-}
-
-.login-page {
-  display: grid;
-  place-items: center;
-  min-height: 100vh;
-  padding: 36px 18px;
-}
-
-.login-page-shell {
-  width: min(100%, 388px);
-  display: grid;
-  justify-items: center;
-  gap: 18px;
-}
-
-.login-page .auth-brand {
-  font-size: clamp(2rem, 4vw, 2.5rem);
-  font-weight: 800;
-  letter-spacing: -0.06em;
-  background: linear-gradient(90deg, #c63f24, #ef8a2e);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-.login-page .auth-card {
-  width: 100%;
 }
 
 .profile-page {
@@ -5619,4 +5559,446 @@ body.auth-mode .content {
 .pager-gap {
   padding: 0 2px;
   color: var(--muted);
+}
+
+/* =========================================================
+ * Entrar / Criar conta: dois lados e um painel que desliza
+ * ========================================================= */
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.login-shell {
+  width: min(100%, 1040px);
+}
+
+.auth-stage {
+  --slide: 650ms cubic-bezier(.65, 0, .25, 1);
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 640px;
+  overflow: hidden;
+  border-radius: 32px;
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+.auth-half {
+  display: grid;
+  align-items: center;
+  padding: 36px clamp(24px, 4vw, 52px);
+  transition: opacity 400ms ease;
+}
+
+.auth-half-inner {
+  width: min(100%, 380px);
+  margin: 0 auto;
+}
+
+/* O lado tapado pelo painel não recebe foco nem leitor de ecrã */
+.auth-stage[data-mode="login"] .auth-half-register,
+.auth-stage[data-mode="register"] .auth-half-login {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.auth-half h1,
+.auth-half h2 {
+  margin: 0;
+  font-size: 2.3rem;
+  line-height: 1.05;
+  letter-spacing: -0.05em;
+}
+
+.auth-half .auth-subtitle {
+  margin: 8px 0 22px;
+  text-align: left;
+  color: var(--muted);
+}
+
+/* Painel que desliza */
+.auth-overlay {
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 12px;
+  width: calc(50% - 12px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 24px;
+  padding: clamp(26px, 3.4vw, 44px);
+  overflow: hidden;
+  border-radius: 24px;
+  color: #fff;
+  background: linear-gradient(150deg, #3b1b13 0%, #8a2f1d 48%, #dd5a2d 100%);
+  transform: translateX(100%);
+  transition: transform var(--slide);
+  z-index: 2;
+}
+
+.auth-stage[data-mode="register"] .auth-overlay {
+  transform: translateX(0);
+}
+
+.auth-overlay::before,
+.auth-overlay::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.auth-overlay::before {
+  width: 360px;
+  height: 360px;
+  right: -130px;
+  top: -110px;
+}
+
+.auth-overlay::after {
+  width: 220px;
+  height: 220px;
+  left: -70px;
+  bottom: 24%;
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.auth-overlay > * {
+  position: relative;
+  z-index: 1;
+}
+
+.login-page .auth-brand {
+  align-self: flex-start;
+  font-size: 1.9rem;
+  font-weight: 800;
+  letter-spacing: -0.06em;
+  background: none;
+  color: #fff;
+}
+
+/* Os dois textos ocupam o mesmo sítio e trocam por fusão */
+.auth-overlay-copies {
+  display: grid;
+}
+
+.auth-overlay-copy {
+  grid-area: 1 / 1;
+  transition: opacity 350ms ease 150ms;
+}
+
+.auth-stage[data-mode="login"] .auth-overlay-copy[data-for="register"],
+.auth-stage[data-mode="register"] .auth-overlay-copy[data-for="login"] {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  transition: opacity 250ms ease, visibility 0s linear 250ms;
+}
+
+.auth-overlay-copy h2 {
+  margin: 0 0 12px;
+  max-width: 13ch;
+  font-size: clamp(2rem, 3.6vw, 3rem);
+  line-height: 1.04;
+  letter-spacing: -0.05em;
+}
+
+.auth-overlay-copy p {
+  margin: 0 0 22px;
+  max-width: 34ch;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.84);
+}
+
+.auth-overlay-btn {
+  height: 48px;
+  padding: 0 28px;
+  border: 1.5px solid rgba(255, 255, 255, 0.85);
+  border-radius: 999px;
+  background: transparent;
+  color: #fff;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.auth-overlay-btn:hover {
+  background: #fff;
+  color: var(--brand-dark);
+}
+
+.auth-overlay-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.auth-overlay-chips li {
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+/* Formulários */
+.login-page .auth-form label {
+  margin-top: 6px;
+}
+
+.login-page .auth-form input {
+  height: 46px;
+  padding: 0 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(114, 90, 67, 0.18);
+  background: #fff;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.login-page .auth-form input:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 4px rgba(221, 90, 45, 0.14);
+}
+
+.password-field {
+  position: relative;
+}
+
+.login-page .password-field input {
+  padding-right: 52px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+/* O olho só aparece depois de escreveres o primeiro carácter, em qualquer navegador.
+   O botão nativo do Edge fica escondido para não aparecer duplicado. */
+.login-page .password-field input::-ms-reveal,
+.login-page .password-field input::-ms-clear {
+  display: none;
+}
+
+.password-field input:placeholder-shown ~ .password-toggle {
+  visibility: hidden;
+}
+
+.password-toggle:hover,
+.password-toggle.is-visible {
+  color: var(--brand);
+}
+
+.password-toggle:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+
+.password-toggle svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.login-page .register-account-type {
+  margin: 8px 0 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.login-page .register-account-type legend {
+  float: left;
+  grid-column: 1 / -1;
+  width: 100%;
+  margin: 0 0 2px;
+  padding: 0;
+  font-size: 0.9rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.login-page .register-account-option {
+  margin: 0;
+  padding: 12px 12px;
+  grid-template-columns: 18px 1fr;
+  gap: 8px;
+  align-items: start;
+  border: 1.5px solid rgba(114, 90, 67, 0.16);
+  border-radius: 16px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.login-page .register-account-option:hover {
+  border-color: rgba(221, 90, 45, 0.4);
+}
+
+.login-page .register-account-option:has(input:checked) {
+  border-color: var(--brand);
+  background: #fff6f0;
+}
+
+.login-page .register-account-option input {
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+  padding: 0;
+  accent-color: var(--brand);
+  box-shadow: none;
+}
+
+.login-page .register-account-option input:checked ~ span strong {
+  color: var(--brand-dark);
+}
+
+.login-page .register-account-option strong {
+  display: block;
+  font-size: 0.92rem;
+}
+
+.login-page .register-account-option small {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.login-page .login-submit {
+  height: 50px;
+  margin-top: 4px;
+  border-radius: 14px;
+  font-size: 1rem;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.login-page .login-submit:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 18px 32px rgba(191, 60, 33, 0.28);
+}
+
+.login-page .login-submit:focus-visible,
+.login-page .auth-overlay-btn:focus-visible,
+.login-page .back-home-btn:focus-visible {
+  outline: 3px solid rgba(221, 90, 45, 0.5);
+  outline-offset: 2px;
+}
+
+.login-page .auth-message {
+  text-align: left;
+  min-height: 1.2em;
+  margin: 6px 0 8px;
+}
+
+.login-page .back-home-btn {
+  margin-top: 20px;
+  width: auto;
+  padding: 6px 0;
+  font-weight: 700;
+}
+
+.login-page .back-home-btn:hover {
+  text-decoration: underline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-stage {
+    --slide: 0ms;
+  }
+
+  .auth-half,
+  .auth-overlay-copy {
+    transition: none;
+  }
+}
+
+/* Telemóvel: o painel fica no topo, sem deslizar; só o lado ativo aparece */
+@media (max-width: 860px) {
+  .login-page {
+    padding: 14px;
+    place-items: start center;
+  }
+
+  .auth-stage {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: visible;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    border-radius: 0;
+  }
+
+  .auth-overlay {
+    position: relative;
+    order: -1;
+    inset: auto;
+    width: 100%;
+    gap: 14px;
+    padding: 22px;
+    transform: none;
+    transition: none;
+  }
+
+  .auth-overlay-chips {
+    display: none;
+  }
+
+  .auth-overlay-copy h2 {
+    max-width: none;
+    font-size: 1.5rem;
+    margin-bottom: 6px;
+  }
+
+  .auth-overlay-copy p {
+    margin-bottom: 14px;
+  }
+
+  .auth-overlay-btn {
+    height: 42px;
+  }
+
+  .auth-half {
+    padding: 28px 4px 10px;
+  }
+
+  .auth-stage[data-mode="login"] .auth-half-register,
+  .auth-stage[data-mode="register"] .auth-half-login {
+    display: none;
+  }
 }

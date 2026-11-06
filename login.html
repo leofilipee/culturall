@@ -12,78 +12,125 @@
   <script defer src="script.js"></script>
 </head>
 <body class="login-page">
-  <main class="login-page-shell">
-    <a class="auth-brand" href="index.html" aria-label="Cultur'All início">Cultur'All</a>
+  <main class="login-shell">
+    <div class="auth-stage" id="authStage" data-mode="login">
+      <section class="auth-half auth-half-login" id="loginPanel" aria-labelledby="loginTitle">
+        <div class="auth-half-inner">
+          <h1 id="loginTitle">Bem-vindo</h1>
+          <p class="auth-subtitle">Inicie sessão na sua conta</p>
 
-    <section class="auth-card" aria-labelledby="loginTitle">
-      <div class="auth-switch" role="tablist" aria-label="Alternar autenticação">
-        <button class="auth-switch-btn active" id="showLoginBtn" type="button" role="tab" aria-selected="true">Entrar</button>
-        <button class="auth-switch-btn" id="showRegisterBtn" type="button" role="tab" aria-selected="false">Criar conta</button>
-      </div>
+          <form id="loginForm" class="auth-form" novalidate>
+            <label for="emailInput">Email</label>
+            <input id="emailInput" name="email" type="email" placeholder="seu@email.com" autocomplete="username" required />
 
-      <h1 id="loginTitle">Bem-vindo</h1>
-      <p class="auth-subtitle" id="authSubtitle">Inicie sessão na sua conta</p>
+            <label for="passwordInput">Palavra-passe</label>
+            <div class="password-field">
+              <input id="passwordInput" name="password" type="password" placeholder="••••••••" autocomplete="current-password" required />
+              <button class="password-toggle" type="button" data-toggle-password="passwordInput" aria-label="Mostrar palavra-passe" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg></button>
+            </div>
 
-      <section class="auth-panel" id="loginPanel">
-        <form id="loginForm" class="auth-form" novalidate>
-          <label for="emailInput">Email</label>
-          <input id="emailInput" name="email" type="email" placeholder="seu@email.com" autocomplete="username" required />
+            <p class="auth-message" id="authMessage" role="status" aria-live="polite"></p>
 
-          <label for="passwordInput">Palavra-passe</label>
-          <input id="passwordInput" name="password" type="password" placeholder="••••••••" autocomplete="current-password" required />
+            <button class="login-submit" type="submit">
+              <svg viewBox="0 0 24 24"><path d="M10 17l5-5-5-5"></path><path d="M15 12H4"></path></svg>
+              Entrar
+            </button>
+          </form>
 
-          <p class="auth-message" id="authMessage" role="status" aria-live="polite"></p>
-
-          <button class="login-submit" type="submit">
-            <svg viewBox="0 0 24 24"><path d="M10 17l5-5-5-5"></path><path d="M15 12H4"></path></svg>
-            Entrar
-          </button>
-        </form>
+          <button class="back-home-btn" id="backHomeBtn" type="button">Voltar à página inicial</button>
+        </div>
       </section>
 
-      <section class="auth-panel" id="registerPanel" hidden aria-labelledby="registerTitle">
-        <form id="registerForm" class="auth-form auth-form-register" novalidate>
-          <label for="registerNameInput">Nome</label>
-          <input id="registerNameInput" name="name" type="text" placeholder="O teu nome" autocomplete="name" required />
+      <section class="auth-half auth-half-register" id="registerPanel" aria-labelledby="registerTitle">
+        <div class="auth-half-inner">
+          <h2 id="registerTitle">Criar conta</h2>
+          <p class="auth-subtitle">Preenche os teus dados para começar</p>
 
-          <fieldset class="register-account-type">
-            <legend>Tipo de conta</legend>
-            <label class="register-account-option">
-              <input type="radio" name="registerAccountType" value="lambda" checked />
-              <span>
-                <strong>Conta normal</strong>
-                <small>Para utilizadores que só querem guardar favoritos e usar a plataforma.</small>
-              </span>
-            </label>
-            <label class="register-account-option">
-              <input type="radio" name="registerAccountType" value="organizador" />
-              <span>
-                <strong>Conta de Organizador</strong>
-                <small>Fica pendente de aprovação por um administrador antes de poder entrar.</small>
-              </span>
-            </label>
-          </fieldset>
+          <form id="registerForm" class="auth-form auth-form-register" novalidate>
+            <label for="registerNameInput">Nome</label>
+            <input id="registerNameInput" name="name" type="text" placeholder="O teu nome" autocomplete="name" required />
 
-          <label for="registerEmailInput">Email</label>
-          <input id="registerEmailInput" name="email" type="email" placeholder="novo@email.com" autocomplete="email" required />
+            <fieldset class="register-account-type">
+              <legend>Tipo de conta</legend>
+              <label class="register-account-option">
+                <input type="radio" name="registerAccountType" value="lambda" checked />
+                <span>
+                  <strong>Conta normal</strong>
+                  <small>Guarda favoritos e descobre eventos.</small>
+                </span>
+              </label>
+              <label class="register-account-option">
+                <input type="radio" name="registerAccountType" value="organizador" />
+                <span>
+                  <strong>Organizador</strong>
+                  <small>Publica eventos. A conta precisa de aprovação.</small>
+                </span>
+              </label>
+            </fieldset>
 
-          <label for="registerPasswordInput">Palavra-passe</label>
-          <input id="registerPasswordInput" name="password" type="password" placeholder="••••••••" autocomplete="new-password" required />
+            <label for="registerEmailInput">Email</label>
+            <input id="registerEmailInput" name="email" type="email" placeholder="novo@email.com" autocomplete="email" required />
 
-          <label for="registerConfirmPasswordInput">Confirmar palavra-passe</label>
-          <input id="registerConfirmPasswordInput" name="confirmPassword" type="password" placeholder="••••••••" autocomplete="new-password" required />
+            <label for="registerPasswordInput">Palavra-passe</label>
+            <div class="password-field">
+              <input id="registerPasswordInput" name="password" type="password" placeholder="••••••••" autocomplete="new-password" required />
+              <button class="password-toggle" type="button" data-toggle-password="registerPasswordInput" aria-label="Mostrar palavra-passe" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg></button>
+            </div>
 
-          <button class="login-submit" type="submit">
-            <svg viewBox="0 0 24 24"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
-            Criar Conta
-          </button>
-        </form>
+            <label for="registerConfirmPasswordInput">Confirmar palavra-passe</label>
+            <div class="password-field">
+              <input id="registerConfirmPasswordInput" name="confirmPassword" type="password" placeholder="••••••••" autocomplete="new-password" required />
+              <button class="password-toggle" type="button" data-toggle-password="registerConfirmPasswordInput" aria-label="Mostrar palavra-passe" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg></button>
+            </div>
 
-        <p class="auth-message auth-message-register" id="registerMessage" role="status" aria-live="polite"></p>
+            <p class="auth-message auth-message-register" id="registerMessage" role="status" aria-live="polite"></p>
+
+            <button class="login-submit" type="submit">
+              <svg viewBox="0 0 24 24"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>
+              Criar Conta
+            </button>
+          </form>
+        </div>
       </section>
 
-      <button class="back-home-btn" id="backHomeBtn" type="button">Voltar à página inicial</button>
-    </section>
+      <aside class="auth-overlay">
+        <a class="auth-brand" href="index.html" aria-label="Cultur'All início">Cultur'All</a>
+        <div class="auth-overlay-copies">
+        <div class="auth-overlay-copy" data-for="login">
+          <h2>A cultura de Portugal, num só sítio.</h2>
+          <p>Ainda não tens conta? Cria uma para guardares os eventos que queres ver.</p>
+          <button class="auth-overlay-btn" id="showRegisterBtn" type="button">Criar conta</button>
+        </div>
+        <div class="auth-overlay-copy" data-for="register">
+          <h2>Bom ter-te por cá.</h2>
+          <p>Já tens conta? Entra para veres os teus favoritos e gerires os teus eventos.</p>
+          <button class="auth-overlay-btn" id="showLoginBtn" type="button">Entrar</button>
+        </div>
+        </div>
+        <ul class="auth-overlay-chips" aria-hidden="true">
+          <li>🎬 Cinema</li>
+          <li>🎭 Teatro</li>
+          <li>😂 Comédia</li>
+          <li>🎪 Festivais</li>
+          <li>🎨 Arte e Exposições</li>
+          <li>🧘 Bem Estar</li>
+        </ul>
+      </aside>
+    </div>
   </main>
+  <script>
+    // Mostrar / esconder a palavra-passe.
+    document.addEventListener('click', function (event) {
+      var button = event.target instanceof Element ? event.target.closest('[data-toggle-password]') : null;
+      if (!button) return;
+      var input = document.getElementById(button.dataset.togglePassword);
+      if (!input) return;
+      var show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      button.setAttribute('aria-pressed', String(show));
+      button.setAttribute('aria-label', show ? 'Esconder palavra-passe' : 'Mostrar palavra-passe');
+      button.classList.toggle('is-visible', show);
+    });
+  </script>
 </body>
 </html>

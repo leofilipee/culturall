@@ -2542,8 +2542,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const backHomeBtn = document.getElementById('backHomeBtn');
     const showLoginBtn = document.getElementById('showLoginBtn');
     const showRegisterBtn = document.getElementById('showRegisterBtn');
-    const loginTitle = document.getElementById('loginTitle');
-    const authSubtitle = document.getElementById('authSubtitle');
     const emailInput = document.getElementById('emailInput');
     const passwordInput = document.getElementById('passwordInput');
     const registerNameInput = document.getElementById('registerNameInput');
@@ -2564,46 +2562,31 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     };
 
-    const setAuthMode = (mode) => {
+    const authStage = document.getElementById('authStage');
+
+    // O painel vermelho desliza para um dos lados; o lado tapado fica inerte (sem foco nem leitor de ecrã).
+    const setAuthMode = (mode, { focus = true } = {}) => {
       const isRegisterMode = mode === 'register';
 
+      if (authStage) {
+        authStage.dataset.mode = isRegisterMode ? 'register' : 'login';
+      }
+
       if (loginPanel) {
-        loginPanel.hidden = isRegisterMode;
+        loginPanel.inert = isRegisterMode;
       }
 
       if (registerPanel) {
-        registerPanel.hidden = !isRegisterMode;
-      }
-
-      if (showLoginBtn) {
-        showLoginBtn.classList.toggle('active', !isRegisterMode);
-        showLoginBtn.setAttribute('aria-selected', String(!isRegisterMode));
-      }
-
-      if (showRegisterBtn) {
-        showRegisterBtn.classList.toggle('active', isRegisterMode);
-        showRegisterBtn.setAttribute('aria-selected', String(isRegisterMode));
-      }
-
-      if (loginTitle) {
-        loginTitle.textContent = isRegisterMode ? 'Criar conta' : 'Bem-vindo';
-      }
-
-      if (authSubtitle) {
-        authSubtitle.textContent = isRegisterMode
-          ? 'Preenche os teus dados para começar'
-          : 'Inicie sessão na sua conta';
+        registerPanel.inert = !isRegisterMode;
       }
 
       updateAuthMessage('');
       updateRegisterMessage('');
 
-      if (!isRegisterMode) {
-        emailInput?.focus();
-        return;
+      if (focus) {
+        // Espera pelo fim da animação para o foco não fazer a página saltar.
+        window.setTimeout(() => (isRegisterMode ? registerNameInput : emailInput)?.focus({ preventScroll: true }), 350);
       }
-
-      registerNameInput?.focus();
     };
 
     const getSelectedRegisterAccountType = () => registerAccountTypeInputs.find((input) => input.checked)?.value ?? 'lambda';

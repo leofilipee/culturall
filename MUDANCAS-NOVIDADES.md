@@ -165,3 +165,8 @@ Origem: `CulturAll-melhorado.zip` aplicado sobre o projeto online (Vercel + TiDB
 - Dados: eventos terminados deixam de somar visualizações e interações (servidor: `/api/track`, `/api/go` e favoritos; página do evento não regista visita). O que já estava registado continua nos gráficos.
 - Página de um evento terminado: nota "Este evento já terminou." e botões Ver Bilhetes, Favoritos, Calendário e Partilhar desativados (cinzento). `/api/go` já não redireciona para a bilheteira.
 - Mapa: sem botão "Ver mais" e com marcadores agrupados (markercluster, carregado só ao abrir o mapa).
+
+## Fase 8 — Entrar / Criar conta
+- `login.html` passou a ter dois lados (Entrar à esquerda, Criar conta à direita) com um painel vermelho que desliza de um lado para o outro: em "Entrar" tapa a criação de conta; ao carregar em "Criar conta" desliza para tapar o login. O lado tapado fica inerte (sem foco nem leitor de ecrã).
+- No telemóvel o painel fica no topo, sem deslizar, e só aparece o formulário ativo.
+- Botão (olho) para mostrar/esconder a palavra-passe, que só aparece depois de escreveres o primeiro carácter (o botão nativo do Edge fica escondido), e tipo de conta em duas opções selecionáveis. `prefers-reduced-motion` desliga a animação.
