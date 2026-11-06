@@ -273,9 +273,24 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
+    // Clicar numa sugestão não pode tirar o foco ao campo (senão a caixa fecha antes do clique chegar à ligação).
+    document.addEventListener('mousedown', (event) => {
+      if (event.target instanceof Element && event.target.closest('.search-wrap .search-suggestions')) {
+        event.preventDefault();
+      }
+    });
+
+    document.addEventListener('click', (event) => {
+      const link = event.target instanceof Element ? event.target.closest('.search-wrap .search-suggestions a.suggestion') : null;
+      if (link?.href) {
+        event.preventDefault();
+        window.location.href = link.href;
+      }
+    });
+
     document.addEventListener('focusout', (event) => {
       if (isSearchInput(event.target)) {
-        setTimeout(() => { boxFor(event.target).hidden = true; }, 150);
+        setTimeout(() => { boxFor(event.target).hidden = true; }, 250);
       }
     });
   }
