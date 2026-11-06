@@ -139,6 +139,18 @@ document.addEventListener('DOMContentLoaded', () => {
     initHome();
   }
 
+  if (pageType === 'event' || pageType === 'profile') {
+    initGlobalSearch();
+  }
+
+  // Células cortadas com "…" mostram o texto completo ao passar o rato.
+  document.addEventListener('mouseover', (event) => {
+    const cell = event.target instanceof Element ? event.target.closest('.admin-table td, .organizer-table td') : null;
+    if (cell && !cell.title && cell.scrollWidth > cell.clientWidth) {
+      cell.title = cell.textContent.trim();
+    }
+  });
+
   if (pageType === 'favorites' || pageType === 'event') {
     document.addEventListener('culturall:cards-rendered', () => observeCards());
     whenBridgeReady(() => setTimeout(() => observeCards(), 60));
@@ -156,6 +168,63 @@ document.addEventListener('DOMContentLoaded', () => {
     mount: (root, options) => initAnalytics(root, options)
   };
   document.dispatchEvent(new CustomEvent('culturall:enhancements-ready'));
+
+  /* =========================================================
+   * Pesquisa da barra de navegação fora da página inicial:
+   * Enter (ou clicar na sugestão) leva à lista com a pesquisa aplicada
+   * ========================================================= */
+  function initGlobalSearch() {
+    const searchUrl = (query) => `index.html?q=${encodeURIComponent(query)}#eventos`;
+    const isSearchInput = (element) => element instanceof HTMLInputElement && element.matches('.search-wrap input');
+
+    const boxFor = (input) => {
+      const wrap = input.closest('.search-wrap');
+      let box = wrap.querySelector('.search-suggestions');
+      if (!box) {
+        box = document.createElement('div');
+        box.className = 'search-suggestions';
+        box.hidden = true;
+        wrap.appendChild(box);
+      }
+
+      return box;
+    };
+
+    document.addEventListener('input', (event) => {
+      if (!isSearchInput(event.target)) {
+        return;
+      }
+
+      const box = boxFor(event.target);
+      const query = event.target.value.trim();
+      if (!query) {
+        box.hidden = true;
+        return;
+      }
+
+      box.innerHTML = `<a class="suggestion suggestion-search" href="${searchUrl(query)}"><span><strong>Pesquisar “${escapeHtml(query)}”</strong><small>Ver resultados na página inicial</small></span></a>`;
+      box.hidden = false;
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (!isSearchInput(event.target)) {
+        return;
+      }
+
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        window.location.href = searchUrl(event.target.value.trim());
+      } else if (event.key === 'Escape') {
+        boxFor(event.target).hidden = true;
+      }
+    });
+
+    document.addEventListener('focusout', (event) => {
+      if (isSearchInput(event.target)) {
+        setTimeout(() => { boxFor(event.target).hidden = true; }, 150);
+      }
+    });
+  }
 
   /* =========================================================
    * Página inicial
@@ -463,6 +532,12 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       const district = window.CulturAll.getEventDistrict(event);
+      // Sem coordenadas guardadas: usa o centro da cidade (lista de places.js) antes de recorrer ao distrito.
+      const cityBase = window.CulturAllPlaces?.coordinates(event.city, district);
+      if (cityBase) {
+        return [cityBase[0], cityBase[1]];
+      }
+
       const base = districtCoordinates[district];
       if (!base) {
         return null;

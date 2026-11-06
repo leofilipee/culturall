@@ -301,6 +301,16 @@ document.addEventListener('DOMContentLoaded', () => {
     return 'active';
   };
 
+  // Fim de um evento de vários dias: só a data (o horário de fim fica nas 23:59 e não interessa mostrar).
+  const formatApiEndLabel = (value) => {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime()) && parsed.getHours() === 23 && parsed.getMinutes() === 59) {
+      return new Intl.DateTimeFormat('pt-PT', { day: '2-digit', month: 'long', year: 'numeric' }).format(parsed);
+    }
+
+    return formatApiDateLabel(value);
+  };
+
   const formatApiDateLabel = (value) => {
     if (!value) {
       return 'Data indisponível';
@@ -343,7 +353,7 @@ document.addEventListener('DOMContentLoaded', () => {
       description: String(event.description ?? ''),
       dateLabel: event.dateLabel ?? formatApiDateLabel(eventDate),
       endDate: event.endDate ?? '',
-      endDateLabel: event.endDateLabel ?? (event.endDate ? formatApiDateLabel(event.endDate) : ''),
+      endDateLabel: event.endDateLabel ?? (event.endDate ? formatApiEndLabel(event.endDate) : ''),
       dateBucket: event.dateBucket ?? getDateBucketForDateTime(new Date(eventDate).getTime(), Boolean(event.isRecurring)),
       eventDate,
       location: location || String(event.city ?? ''),
@@ -569,14 +579,20 @@ document.addEventListener('DOMContentLoaded', () => {
             item.classList.toggle('list-hidden', Math.floor(index / pageSize) + 1 !== state.page);
           });
           moreWrap.hidden = pages <= 1;
-          const around = [1, pages, state.page - 1, state.page, state.page + 1].filter((n) => n >= 1 && n <= pages);
-          const numbersToShow = [...new Set(around)].sort((a, b) => a - b);
-          let previous = 0;
-          const buttons = numbersToShow.map((n) => {
-            const gap = n - previous > 1 ? '<span class="pager-gap" aria-hidden="true">…</span>' : '';
-            previous = n;
-            return `${gap}<button type="button" class="pager-btn${n === state.page ? ' active' : ''}" data-page="${n}" aria-label="Página ${n}"${n === state.page ? ' aria-current="page"' : ''}>${n}</button>`;
-          }).join('');
+          // Sempre os mesmos 7 lugares (ex.: 1 2 3 4 5 … 20), para os botões não mudarem de posição ao navegar.
+          let slots;
+          if (pages <= 7) {
+            slots = Array.from({ length: pages }, (_, index) => index + 1);
+          } else if (state.page <= 4) {
+            slots = [1, 2, 3, 4, 5, 'gap', pages];
+          } else if (state.page >= pages - 3) {
+            slots = [1, 'gap', pages - 4, pages - 3, pages - 2, pages - 1, pages];
+          } else {
+            slots = [1, 'gap', state.page - 1, state.page, state.page + 1, 'gap', pages];
+          }
+          const buttons = slots.map((n) => (n === 'gap'
+            ? '<span class="pager-gap" aria-hidden="true">…</span>'
+            : `<button type="button" class="pager-btn${n === state.page ? ' active' : ''}" data-page="${n}" aria-label="Página ${n}"${n === state.page ? ' aria-current="page"' : ''}>${n}</button>`)).join('');
           pager.innerHTML = `<button type="button" class="pager-btn" data-page="${state.page - 1}" aria-label="Página anterior"${state.page === 1 ? ' disabled' : ''}>‹</button>${buttons}<button type="button" class="pager-btn" data-page="${state.page + 1}" aria-label="Página seguinte"${state.page === pages ? ' disabled' : ''}>›</button>`;
         } else {
           visibleItems.forEach((item, index) => {
@@ -1533,7 +1549,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
               <div class="event-detail-info-row">
                 <span class="event-detail-info-label">Data e Hora</span>
-                <strong>${formatEventDetailDate(event)}${event.endDate ? ' — ' + formatApiDateLabel(event.endDate) : ''}</strong>
+                <strong>${formatEventDetailDate(event)}${event.endDate ? ' — ' + formatApiEndLabel(event.endDate) : ''}</strong>
               </div>
 
               <div class="event-detail-info-row">
@@ -2092,6 +2108,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const priceFilter = document.getElementById('priceFilter');
     const ownEventsGroup = document.getElementById('ownEventsGroup');
     const ownEventsToggle = document.getElementById('ownEventsToggle');
+    // Pesquisa vinda da barra de navegação de outras páginas (index.html?q=...).
+    if (pageType === 'home' && searchInput) {
+      const incomingQuery = new URL(window.location.href).searchParams.get('q');
+      if (incomingQuery) {
+        searchInput.value = incomingQuery;
+      }
+    }
     const loginToggleBtn = document.getElementById('loginToggleBtn');
     const accountChip = document.getElementById('accountChip');
     const filtersShell = document.getElementById('filtersShell');
@@ -4408,13 +4431,8 @@ document.addEventListener('DOMContentLoaded', () => {
               </label>
 
               <label class="organizer-date-field" id="organizerEndDateField">
-                Data fim
+                Data fim <small>(só se durar vários dias)</small>
                 <input id="organizerEventEndDate" type="date" />
-              </label>
-
-              <label class="organizer-date-field" id="organizerEndTimeField">
-                Hora fim
-                <input id="organizerEventEndTime" type="time" value="22:00" />
               </label>
 
               <fieldset class="organizer-recurring-field" id="organizerRecurringField" hidden>
@@ -4436,19 +4454,21 @@ document.addEventListener('DOMContentLoaded', () => {
               <fieldset class="organizer-location-field">
                 <legend>Localização</legend>
                 <label>
-                  Local / morada
-                  <input id="organizerEventLocation" type="text" maxlength="150" placeholder="Ex.: Casa da Música, Av. da Boavista" />
-                </label>
-                <label>
-                  Cidade
-                  <input id="organizerEventCity" type="text" maxlength="100" placeholder="Ex.: Porto" required />
-                </label>
-                <label>
                   Distrito
                   <select id="organizerEventDistrict" required>
                     <option value="">Escolhe o distrito</option>
                     ${districtOptionList.map((district) => `<option value="${esc(district)}">${esc(district)}</option>`).join('')}
                   </select>
+                </label>
+                <label>
+                  Cidade
+                  <select id="organizerEventCity" required disabled>
+                    <option value="">Escolhe primeiro o distrito</option>
+                  </select>
+                </label>
+                <label>
+                  Local / morada
+                  <input id="organizerEventLocation" type="text" maxlength="150" placeholder="Ex.: Casa da Música, Av. da Boavista" />
                 </label>
               </fieldset>
 
@@ -4598,12 +4618,26 @@ document.addEventListener('DOMContentLoaded', () => {
       const organizerEventLocation = document.getElementById('organizerEventLocation');
       const organizerEventCity = document.getElementById('organizerEventCity');
       const organizerEventDistrict = document.getElementById('organizerEventDistrict');
+
+      // Cidades do distrito escolhido (lista fixa em places.js). Ao editar um evento antigo, mantém a cidade que ele já tinha.
+      const fillCityOptions = (district, selectedCity = '') => {
+        if (!organizerEventCity) {
+          return;
+        }
+
+        const cities = window.CulturAllPlaces?.cities(district) ?? [];
+        const extra = selectedCity && !cities.includes(selectedCity) ? [selectedCity] : [];
+        organizerEventCity.innerHTML = district
+          ? `<option value="">Escolhe a cidade</option>${[...cities, ...extra].map((city) => `<option value="${esc(city)}">${esc(city)}</option>`).join('')}`
+          : '<option value="">Escolhe primeiro o distrito</option>';
+        organizerEventCity.disabled = !district;
+        organizerEventCity.value = selectedCity;
+      };
       const organizerEventPriceValue = document.getElementById('organizerEventPriceValue');
       const organizerEventImages = document.getElementById('organizerEventImages');
       const organizerEventTicketUrl = document.getElementById('organizerEventTicketUrl');
       const organizerEventDescription = document.getElementById('organizerEventDescription');
       const organizerEventEndDate = document.getElementById('organizerEventEndDate');
-      const organizerEventEndTime = document.getElementById('organizerEventEndTime');
 
       // ---- Galeria de imagens do evento (várias imagens, uma principal) ----
       const maxOrganizerImages = 10;
@@ -4823,13 +4857,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (organizerEventEndDate) {
-          organizerEventEndDate.required = !isRecurring;
+          organizerEventEndDate.required = false;
           organizerEventEndDate.closest('label')?.classList.toggle('hidden', isRecurring);
-        }
-
-        if (organizerEventEndTime) {
-          organizerEventEndTime.required = !isRecurring;
-          organizerEventEndTime.closest('label')?.classList.toggle('hidden', isRecurring);
         }
 
         const isPaid = organizerEventPriceType?.value === 'Pago';
@@ -4983,18 +5012,12 @@ document.addEventListener('DOMContentLoaded', () => {
             organizerEventDateType.value = 'fixed';
             organizerEventDate.value = (eventObj.eventDate ?? '').slice(0,10);
             organizerEventTime.value = (new Date(eventObj.eventDate)).toTimeString().slice(0,5) || '20:00';
-            if (eventObj.endDate) {
-              try {
-                organizerEventEndDate.value = (eventObj.endDate ?? '').slice(0,10);
-                organizerEventEndTime.value = (new Date(eventObj.endDate)).toTimeString().slice(0,5) || '22:00';
-              } catch (e) {
-                // silenciar se formato inesperado
-              }
-            }
+            const endDay = (eventObj.endDate ?? '').slice(0, 10);
+            organizerEventEndDate.value = endDay && endDay !== (eventObj.eventDate ?? '').slice(0, 10) ? endDay : '';
           }
           organizerEventLocation.value = eventObj.street ?? '';
-          organizerEventCity.value = eventObj.city ?? '';
           organizerEventDistrict.value = districtOptionList.includes(eventObj.district) ? eventObj.district : '';
+          fillCityOptions(organizerEventDistrict.value, eventObj.city ?? '');
           organizerEventDescription.value = eventObj.description ?? '';
           organizerEventPriceType.value = eventObj.priceType ?? 'Pago';
           organizerEventPriceValue.value = eventObj.price ?? '';
@@ -5037,6 +5060,9 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         };
 
+        organizerEventDistrict?.addEventListener('change', () => fillCityOptions(organizerEventDistrict.value, ''));
+        organizerCreateForm.addEventListener('reset', () => setTimeout(() => fillCityOptions('', ''), 0));
+
         organizerCreateForm.addEventListener('submit', async (event) => {
           event.preventDefault();
 
@@ -5053,6 +5079,7 @@ document.addEventListener('DOMContentLoaded', () => {
           }
           const street = organizerEventLocation?.value.trim() ?? '';
           const city = organizerEventCity?.value.trim() ?? '';
+          const cityCoordinates = window.CulturAllPlaces?.coordinates(city, organizerEventDistrict?.value ?? '') ?? null;
           const district = organizerEventDistrict?.value ?? '';
           const priceType = organizerEventPriceType?.value ?? 'Gratuito';
           const ticketUrl = priceType === 'Pago' ? (organizerEventTicketUrl?.value.trim() ?? '') : '';
@@ -5078,8 +5105,8 @@ document.addEventListener('DOMContentLoaded', () => {
           if (!title || !city || !district || (isPaid && !ticketUrl)) {
             if (organizerCreateMessage) {
               organizerCreateMessage.textContent = isPaid
-                ? 'Preenche o título, a cidade, o distrito e o link de bilhetes.'
-                : 'Preenche o título, a cidade e o distrito.';
+                ? 'Preenche o título, o distrito, a cidade e o link de bilhetes.'
+                : 'Preenche o título, o distrito e a cidade.';
             }
             return;
           }
@@ -5123,7 +5150,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const dateValue = organizerEventDate?.value;
             const timeValue = organizerEventTime?.value || '20:00';
             const endDateValue = organizerEventEndDate?.value;
-            const endTimeValue = organizerEventEndTime?.value || '22:00';
             if (!dateValue) {
               if (organizerCreateMessage) {
                 organizerCreateMessage.textContent = 'Seleciona uma data válida para o evento.';
@@ -5131,15 +5157,8 @@ document.addEventListener('DOMContentLoaded', () => {
               return;
             }
 
-            if (!endDateValue) {
-              if (organizerCreateMessage) {
-                organizerCreateMessage.textContent = 'Seleciona a data de fim do evento.';
-              }
-              return;
-            }
-
             const startDt = new Date(`${dateValue}T${timeValue}:00`);
-            const endDt = new Date(`${endDateValue}T${endTimeValue}:00`);
+            const endDt = endDateValue ? new Date(`${endDateValue}T23:59:00`) : startDt;
             if (Number.isNaN(startDt.getTime()) || Number.isNaN(endDt.getTime())) {
               if (organizerCreateMessage) {
                 organizerCreateMessage.textContent = 'Datas inválidas.';
@@ -5162,10 +5181,10 @@ document.addEventListener('DOMContentLoaded', () => {
           // montar endDate para envio
           let endDatePayload = '';
           if (dateType !== 'recurring') {
+            // Só há data de fim em eventos de vários dias; termina no fim desse dia.
             const endDateVal = organizerEventEndDate?.value;
-            const endTimeVal = organizerEventEndTime?.value || '22:00';
-            if (endDateVal) {
-              const endDtForPayload = new Date(`${endDateVal}T${endTimeVal}:00`);
+            if (endDateVal && endDateVal !== organizerEventDate?.value) {
+              const endDtForPayload = new Date(`${endDateVal}T23:59:00`);
               if (!Number.isNaN(endDtForPayload.getTime())) {
                 endDatePayload = formatApiDateTime(endDtForPayload);
               }
@@ -5203,6 +5222,7 @@ document.addEventListener('DOMContentLoaded', () => {
                   locationStreet: street,
                   locationCity: city,
                   locationDistrict: district,
+                  ...(cityCoordinates ? { latitude: cityCoordinates[0], longitude: cityCoordinates[1] } : {}),
                   isRecurring,
                   recurringPattern: isRecurring ? 'semanal' : '',
                   recurringDays: isRecurring ? recurringDays.join(',') : '',
@@ -5225,6 +5245,7 @@ document.addEventListener('DOMContentLoaded', () => {
                   locationStreet: street,
                   locationCity: city,
                   locationDistrict: district,
+                  ...(cityCoordinates ? { latitude: cityCoordinates[0], longitude: cityCoordinates[1] } : {}),
                   isRecurring,
                   recurringPattern: isRecurring ? 'semanal' : '',
                   recurringDays: isRecurring ? recurringDays.join(',') : '',

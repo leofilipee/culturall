@@ -7114,3 +7114,108 @@ body.auth-mode .content {
     padding: 10px 14px;
   }
 }
+
+/* =========================================================
+ * Tabelas estáveis: colunas de largura fixa e linhas com a
+ * mesma altura, mesmo quando o texto é mais comprido.
+ * ========================================================= */
+@media (min-width: 901px) {
+  .admin-table,
+  .organizer-table {
+    table-layout: fixed;
+  }
+
+  .admin-table thead th,
+  .organizer-table thead th {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .admin-table tbody td,
+  .organizer-table tbody td {
+    height: 64px;
+    padding-top: 0;
+    padding-bottom: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  [data-admin-pane="users"] .admin-table th:nth-child(1) { width: 20%; }
+  [data-admin-pane="users"] .admin-table th:nth-child(2) { width: 26%; }
+  [data-admin-pane="users"] .admin-table th:nth-child(3) { width: 15%; }
+  [data-admin-pane="users"] .admin-table th:nth-child(4) { width: 10%; }
+  [data-admin-pane="users"] .admin-table th:nth-child(5) { width: 12%; }
+  [data-admin-pane="users"] .admin-table th:nth-child(6) { width: 17%; }
+
+  [data-admin-pane="moderation"] .admin-table th:nth-child(1) { width: 26%; }
+  [data-admin-pane="moderation"] .admin-table th:nth-child(2) { width: 16%; }
+  [data-admin-pane="moderation"] .admin-table th:nth-child(3) { width: 16%; }
+  [data-admin-pane="moderation"] .admin-table th:nth-child(4) { width: 16%; }
+  [data-admin-pane="moderation"] .admin-table th:nth-child(5) { width: 12%; }
+  [data-admin-pane="moderation"] .admin-table th:nth-child(6) { width: 14%; }
+
+  [data-admin-pane="organizers"] .admin-table th:nth-child(1) { width: 20%; }
+  [data-admin-pane="organizers"] .admin-table th:nth-child(2) { width: 27%; }
+  [data-admin-pane="organizers"] .admin-table th:nth-child(3) { width: 14%; }
+  [data-admin-pane="organizers"] .admin-table th:nth-child(4) { width: 13%; }
+  [data-admin-pane="organizers"] .admin-table th:nth-child(5) { width: 12%; }
+  [data-admin-pane="organizers"] .admin-table th:nth-child(6) { width: 14%; }
+
+  .organizer-table th:nth-child(1) { width: 17%; }
+  .organizer-table th:nth-child(2) { width: 12%; }
+  .organizer-table th:nth-child(3) { width: 14%; }
+  .organizer-table th:nth-child(4) { width: 16%; }
+  .organizer-table th:nth-child(5) { width: 12%; }
+  .organizer-table th:nth-child(6) { width: 13%; }
+  .organizer-table th:nth-child(7) { width: 16%; }
+}
+
+/* Paginação com botões sempre do mesmo tamanho */
+.pager {
+  gap: 6px;
+}
+
+.pager-btn {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pager-gap {
+  width: 40px;
+  padding: 0;
+  text-align: center;
+}
+
+.search-suggestions .suggestion-search {
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 901px) {
+  .organizer-table thead th,
+  .organizer-table tbody td {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .organizer-table thead th {
+    letter-spacing: 0.04em;
+    font-size: 0.68rem;
+  }
+
+  .organizer-actions-cell {
+    gap: 8px;
+  }
+}
+
+.organizer-create-form label small {
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}

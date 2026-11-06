@@ -170,3 +170,11 @@ Origem: `CulturAll-melhorado.zip` aplicado sobre o projeto online (Vercel + TiDB
 - `login.html` passou a ter dois lados (Entrar à esquerda, Criar conta à direita) com um painel vermelho que desliza de um lado para o outro: em "Entrar" tapa a criação de conta; ao carregar em "Criar conta" desliza para tapar o login. O lado tapado fica inerte (sem foco nem leitor de ecrã).
 - No telemóvel o painel fica no topo, sem deslizar, e só aparece o formulário ativo.
 - Botão (olho) para mostrar/esconder a palavra-passe, que só aparece depois de escreveres o primeiro carácter (o botão nativo do Edge fica escondido), e tipo de conta em duas opções selecionáveis. `prefers-reduced-motion` desliga a animação.
+
+## Fase 9: formulário, mapa, pesquisa e listas
+
+- **Localização no formulário:** a ordem passou a ser Distrito → Cidade → Local/morada. A cidade é uma lista que depende do distrito (`places.js`) e, ao guardar, o evento leva as coordenadas da cidade. O mapa usa essas coordenadas (e, em eventos antigos sem coordenadas, o centro da cidade) em vez do centro do distrito. Ao editar um evento antigo, a cidade que ele já tinha continua disponível.
+- **Datas:** nos eventos fixos desapareceu a "Hora fim". A "Data fim" é opcional e só serve para eventos de vários dias (termina no fim desse dia). Sem data de fim, o evento acaba no fim do dia em que começa.
+- **Pesquisa da barra de navegação:** passou a funcionar nas páginas do evento e do perfil. Enter (ou a sugestão) abre a página inicial com a pesquisa aplicada (`index.html?q=...`).
+- **Tabelas:** colunas de largura fixa e linhas com a mesma altura. O texto longo corta com "…" e mostra-se completo ao passar o rato.
+- **Paginação numerada:** sempre 7 lugares (ex.: 1 2 3 4 5 … 20) com botões do mesmo tamanho, para não saltarem ao navegar.
