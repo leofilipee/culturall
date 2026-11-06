@@ -141,3 +141,12 @@ Origem: `CulturAll-melhorado.zip` aplicado sobre o projeto online (Vercel + TiDB
 - **Cancelar:** "Cancelar pedido de aprovação" (evento novo pendente → fica oculto) e "Cancelar pedido de alteração" (descarta as mudanças), na tabela do organizador e na página do evento. Se o administrador recusar uma alteração, o organizador vê o motivo e pode dispensar o aviso.
 - **Revisão pelo administrador na página do evento:** `event.html?id=ID` abre para o administrador mesmo com o evento pendente. Mostra o evento tal como ficará, com botões Aprovar/Recusar (recusa pede motivo), e nos pedidos de alteração a lista do que muda e um interruptor "Versão atual / Versão proposta". A lista de moderação e o sino têm ligações diretas para essas páginas. Visitas e cliques de administradores/donos não contam nas estatísticas.
 - `GET /api/event-review?id=` (admin ou dono) e ações `approve_change`, `reject_change` (admin), `cancel_change`, `cancel_request` (organizador).
+
+### Fase 5c — Imagens na edição, filtros nas listas
+
+- **Editar mantém as imagens:** o formulário de edição mostra as imagens já enviadas (podem ser mantidas, removidas, trocar a principal ou juntar novas). O pedido envia a ordem (`imageOrder`, com `existing:<id>`), por isso as imagens atuais não voltam a viajar em base64. Novos endpoints: `GET /api/event-images?eventId=&ids=1` e `GET /api/event-cover?img=<id>`. Os pedidos de alteração mostram no "O que muda" quantas imagens foram adicionadas/removidas.
+- **"Só os meus eventos":** só aparece a organizadores com sessão (corrigido: o CSS sobrepunha o atributo `hidden`).
+- **Sino do administrador** em todas as páginas com barra de topo, incluindo o perfil/painel de administração.
+- **Ordenar e filtrar listas:** utilizadores, organizadores, eventos pendentes, pedidos de alteração, eventos publicados, eventos do organizador e favoritos. Nomes por ordem alfabética, datas por data, números por valor; filtros por categoria, estado, organizador. Botão "Limpar" e contagem de resultados.
+- **Ícones centrados** nos botões das listas e coluna de ações centrada.
+

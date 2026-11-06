@@ -5072,6 +5072,10 @@ body.auth-mode .content {
 }
 
 /* ---------- Filtro "Só os meus eventos" ---------- */
+.own-filter-group[hidden] {
+  display: none;
+}
+
 .own-filter-group {
   display: flex;
   align-items: center;
@@ -5409,4 +5413,141 @@ body.auth-mode .content {
   font-weight: 700;
   color: var(--brand-dark);
   text-decoration: none;
+}
+
+/* ---------- Ícones centrados nos botões das listas ---------- */
+.admin-icon-btn,
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  line-height: 0;
+  text-decoration: none;
+}
+
+.icon-btn {
+  width: 32px;
+  height: 32px;
+}
+
+.admin-icon-btn svg,
+.icon-btn svg {
+  display: block;
+  flex: none;
+  margin: 0;
+}
+
+.admin-view-btn,
+.admin-approve-btn,
+.admin-reject-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.admin-review-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.admin-actions-group,
+.organizer-actions-cell {
+  justify-content: center;
+}
+
+.admin-table th:last-child,
+.admin-table td:last-child,
+.organizer-table th:last-child,
+.organizer-table td:last-child {
+  text-align: center;
+}
+
+.admin-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-card-head h2 {
+  margin: 0;
+}
+
+/* ---------- Ordenar / filtrar listas ---------- */
+.list-hidden {
+  display: none !important;
+}
+
+.list-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+  margin: 12px 0;
+}
+
+.list-controls[hidden] {
+  display: none;
+}
+
+.list-control {
+  display: grid;
+  gap: 4px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.list-control select {
+  min-width: 150px;
+  max-width: 230px;
+  height: 36px;
+  border: 1px solid rgba(174, 145, 112, 0.25);
+  border-radius: 10px;
+  background: rgba(239, 226, 209, 0.96);
+  color: var(--text);
+  padding: 0 10px;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.list-controls-reset {
+  height: 36px;
+  border: 1px solid rgba(195, 70, 33, 0.35);
+  background: transparent;
+  color: var(--brand-dark);
+  border-radius: 999px;
+  padding: 0 14px;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.list-controls-reset[hidden] {
+  display: none;
+}
+
+.list-count {
+  margin-left: auto;
+  align-self: center;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.admin-approve-btn[hidden],
+.admin-reject-btn[hidden],
+.admin-view-btn[hidden],
+.owner-cancel-btn[hidden],
+.text-btn[hidden] {
+  display: none;
 }

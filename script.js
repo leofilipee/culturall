@@ -442,6 +442,169 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  /* ---------- Ordenar e filtrar listas ---------- */
+  // "dd/mm/aa(aa)[, hh:mm]", ISO ou milissegundos -> timestamp (ou null).
+  const parseListDate = (text) => {
+    const value = String(text ?? '').trim();
+    if (/^\d{10,}$/.test(value)) {
+      return Number(value);
+    }
+
+    const pt = value.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:[,\s]+(\d{1,2}):(\d{2}))?/);
+    if (pt) {
+      const year = Number(pt[3]) < 100 ? 2000 + Number(pt[3]) : Number(pt[3]);
+      return new Date(year, Number(pt[2]) - 1, Number(pt[1]), Number(pt[4] ?? 0), Number(pt[5] ?? 0)).getTime();
+    }
+
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  };
+
+  // Barra de ordenação + filtros para uma lista que se volta a desenhar (tabela ou cartões). Funciona sobre o DOM:
+  // volta a aplicar-se sozinha sempre que a lista muda. `fields[chave](elemento)` devolve o texto de cada coluna.
+  const attachListControls = ({ container, anchor, getItems, fields, sorts = [], filters = [], noun = 'resultados' }) => {
+    if (!container || !anchor || anchor.previousElementSibling?.classList.contains('list-controls')) {
+      return;
+    }
+
+    const state = { sort: '', filters: {} };
+    let originalCounter = 0;
+    let applying = false;
+    const bar = document.createElement('div');
+    bar.className = 'list-controls';
+    bar.innerHTML = `
+      ${sorts.length ? `<label class="list-control"><span>Ordenar por</span>
+        <select data-list-sort><option value="">Ordem original</option>${sorts.map((sort) => `<option value="${esc(sort.value)}">${esc(sort.label)}</option>`).join('')}</select></label>` : ''}
+      ${filters.map((filter) => `<label class="list-control"><span>${esc(filter.label)}</span>
+        <select data-list-filter="${esc(filter.id)}"><option value="">Todos</option></select></label>`).join('')}
+      <button type="button" class="list-controls-reset" hidden>Limpar</button>
+      <span class="list-count" role="status" aria-live="polite"></span>
+    `;
+    anchor.before(bar);
+    const sortSelect = bar.querySelector('[data-list-sort]');
+    const resetButton = bar.querySelector('.list-controls-reset');
+    const countEl = bar.querySelector('.list-count');
+
+    const toNumber = (text) => {
+      const number = parseFloat(String(text ?? '').replace(',', '.').replace(/[^\d.-]/g, ''));
+      return Number.isNaN(number) ? null : number;
+    };
+
+    const apply = () => {
+      if (applying) {
+        return;
+      }
+
+      applying = true;
+      observer.disconnect();
+      try {
+        const items = getItems();
+        items.forEach((item) => {
+          if (item.dataset.listOrig === undefined) {
+            item.dataset.listOrig = String(originalCounter += 1);
+          }
+        });
+
+        filters.forEach((filter) => {
+          const select = bar.querySelector(`[data-list-filter="${filter.id}"]`);
+          const values = [...new Set(items.map((item) => String(fields[filter.key](item) ?? '').trim()).filter(Boolean))]
+            .sort((a, b) => a.localeCompare(b, 'pt', { sensitivity: 'base' }));
+          if (state.filters[filter.id] && !values.includes(state.filters[filter.id])) {
+            state.filters[filter.id] = '';
+          }
+
+          select.innerHTML = `<option value="">Todos</option>${values.map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join('')}`;
+          select.value = state.filters[filter.id] ?? '';
+        });
+
+        let visible = 0;
+        items.forEach((item) => {
+          const matches = filters.every((filter) => !state.filters[filter.id] || String(fields[filter.key](item) ?? '').trim() === state.filters[filter.id]);
+          item.classList.toggle('list-hidden', !matches);
+          if (matches) {
+            visible += 1;
+          }
+        });
+
+        const sort = sorts.find((candidate) => candidate.value === state.sort);
+        const ordered = items.slice().sort((a, b) => {
+          if (!sort) {
+            return Number(a.dataset.listOrig) - Number(b.dataset.listOrig);
+          }
+
+          const left = fields[sort.key](a);
+          const right = fields[sort.key](b);
+          let result;
+          if (sort.type === 'date' || sort.type === 'number') {
+            const l = sort.type === 'date' ? parseListDate(left) : toNumber(left);
+            const r = sort.type === 'date' ? parseListDate(right) : toNumber(right);
+            // Sem valor vai sempre para o fim.
+            if (l === null && r === null) return 0;
+            if (l === null) return 1;
+            if (r === null) return -1;
+            result = (l - r) * sort.dir;
+          } else {
+            result = String(left ?? '').localeCompare(String(right ?? ''), 'pt', { sensitivity: 'base', numeric: true }) * sort.dir;
+          }
+
+          return result || Number(a.dataset.listOrig) - Number(b.dataset.listOrig);
+        });
+        ordered.forEach((item) => container.appendChild(item));
+
+        const filtered = Boolean(state.sort) || filters.some((filter) => state.filters[filter.id]);
+        resetButton.hidden = !filtered;
+        const nounFor = (count) => (count === 1 ? noun.replace(/s$/, '') : noun);
+        countEl.textContent = items.length === 0 ? '' : visible === items.length ? `${items.length} ${nounFor(items.length)}` : `${visible} de ${items.length} ${nounFor(items.length)}`;
+        bar.hidden = items.length === 0;
+      } finally {
+        observer.observe(container, { childList: true });
+        applying = false;
+      }
+    };
+
+    const observer = new MutationObserver(apply);
+    bar.addEventListener('change', (event) => {
+      const target = event.target;
+      if (target.matches('[data-list-sort]')) {
+        state.sort = target.value;
+      } else if (target.matches('[data-list-filter]')) {
+        state.filters[target.dataset.listFilter] = target.value;
+      }
+
+      apply();
+    });
+    resetButton.addEventListener('click', () => {
+      state.sort = '';
+      state.filters = {};
+      if (sortSelect) {
+        sortSelect.value = '';
+      }
+
+      apply();
+    });
+    apply();
+  };
+
+  // Atalhos para tabelas (colunas por índice) e para listas de cartões (atributos data-*).
+  const tableListControls = (table, columns, sorts, filters, noun) => {
+    if (!table?.tBodies[0]) {
+      return;
+    }
+
+    const body = table.tBodies[0];
+    const cell = (index) => (row) => (row.cells[index]?.querySelector('.organizer-badge, .admin-pill')?.textContent ?? row.cells[index]?.textContent ?? '').trim();
+    const fields = Object.fromEntries(Object.entries(columns).map(([key, index]) => [key, cell(index)]));
+    attachListControls({
+      container: body,
+      anchor: table.closest('.admin-table-wrap, .organizer-panel') ?? table,
+      getItems: () => Array.from(body.rows).filter((row) => !row.querySelector('td[colspan]')),
+      fields,
+      sorts,
+      filters,
+      noun
+    });
+  };
+
   const loadOrganizerEvents = async () => {
     try {
       const response = await requestJson('/api/events?scope=own&status=all');
@@ -894,6 +1057,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const loginToggleBtn = rootDocument.getElementById('loginToggleBtn');
     const accountChip = rootDocument.getElementById('accountChip');
 
+    // O sino do administrador aparece em todas as páginas com barra de topo (a do perfil tem ids próprios).
+    if (session?.accountType === 'admin') {
+      ensureAdminBell(rootDocument);
+    }
+
     if (!loginToggleBtn || !accountChip) {
       return;
     }
@@ -902,10 +1070,6 @@ document.addEventListener('DOMContentLoaded', () => {
     loginToggleBtn.replaceChildren();
     loginToggleBtn.insertAdjacentHTML('afterbegin', session ? iconLogout : iconLogin);
     loginToggleBtn.append(document.createTextNode(session ? 'Sair' : 'Entrar'));
-
-    if (session?.accountType === 'admin') {
-      ensureAdminBell(rootDocument);
-    }
 
     if (session) {
       accountChip.hidden = false;
@@ -1008,7 +1172,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const timing = getEventTiming(event);
     const isFree = event.priceType === 'Gratuito';
     return `
-    <article class="event-card${isPastEvent(event) ? ' is-past' : ''}" style="--stagger:${Math.min(index, 8)}" tabindex="0" role="link" aria-label="Abrir evento ${esc(event.title)}" data-event-id="${esc(event.id)}" data-event-link="${esc(getEventDetailUrl(event.id))}" data-category="${esc(event.category)}" data-date="${esc(event.dateBucket)}" data-location="${esc(getEventDistrict(event))}" data-price="${esc(event.priceType)}" data-title="${esc(event.title.toLowerCase())}">
+    <article class="event-card${isPastEvent(event) ? ' is-past' : ''}" style="--stagger:${Math.min(index, 8)}" tabindex="0" role="link" aria-label="Abrir evento ${esc(event.title)}" data-event-id="${esc(event.id)}" data-event-link="${esc(getEventDetailUrl(event.id))}" data-category="${esc(event.category)}" data-ts="${esc(String(new Date(event.eventDate).getTime() || ''))}" data-date="${esc(event.dateBucket)}" data-location="${esc(getEventDistrict(event))}" data-price="${esc(event.priceType)}" data-title="${esc(event.title.toLowerCase())}">
       <div class="event-media">
         <div class="event-date-badge" aria-hidden="true"><strong>${timing.day}</strong><span>${timing.month}</span></div>
         <div class="event-media-actions">
@@ -1818,6 +1982,24 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     bindEventCardActions(cardsGrid, { onRender: () => rerenderListingPage?.() });
+
+    // Favoritos: ordenar por nome/data e filtrar por categoria.
+    if (pageType === 'favorites') {
+      attachListControls({
+        container: cardsGrid,
+        anchor: cardsGrid,
+        getItems: () => Array.from(cardsGrid.querySelectorAll(':scope > .event-card:not(.skeleton-card)')),
+        fields: { title: (card) => card.dataset.title ?? '', category: (card) => card.dataset.category ?? '', date: (card) => card.dataset.ts ?? '' },
+        sorts: [
+          { value: 'title-asc', label: 'Nome (A–Z)', key: 'title', type: 'text', dir: 1 },
+          { value: 'title-desc', label: 'Nome (Z–A)', key: 'title', type: 'text', dir: -1 },
+          { value: 'date-asc', label: 'Data (mais próxima)', key: 'date', type: 'date', dir: 1 },
+          { value: 'date-desc', label: 'Data (mais distante)', key: 'date', type: 'date', dir: -1 }
+        ],
+        filters: [{ id: 'category', label: 'Categoria', key: 'category' }],
+        noun: 'favoritos'
+      });
+    }
 
     const emptyState = document.getElementById('emptyState');
     const resultsCount = document.getElementById('resultsCount');
@@ -3119,6 +3301,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="admin-review-list" data-admin-pending-events></div>
               </div>
 
+              <div class="admin-section-card" data-admin-changes-card hidden>
+                <h2>Pedidos de Alteração</h2>
+                <div class="admin-review-list" data-admin-change-requests></div>
+              </div>
+
               <div class="admin-section-card">
                 <h2>Eventos Publicados</h2>
                 <div class="admin-table-wrap">
@@ -3287,17 +3474,19 @@ document.addEventListener('DOMContentLoaded', () => {
       const getAdminPublishedEvents = () => adminEventsState.items.filter((event) => ['active', 'hidden'].includes(normalizeAdminEventStatus(event.status)));
 
       const renderAdminModerationLists = () => {
+        const eventDataAttrs = (event) => `data-title="${esc(event.title)}" data-category="${esc(event.category)}" data-organizer="${esc(event.organizerName ?? event.organizerEmail ?? '')}" data-date="${esc(String(new Date(event.startDate ?? event.eventDate ?? 0).getTime() || ''))}" data-submitted="${esc(String(new Date(event.submittedAt || 0).getTime() || ''))}"`;
+
         if (adminPendingEventsContainer) {
           const pendingEvents = getAdminPendingEvents();
           adminPendingEventsContainer.innerHTML = pendingEvents.length > 0
             ? pendingEvents.map((event) => `
-                <article class="admin-review-item">
+                <article class="admin-review-item" ${eventDataAttrs(event)}>
                   <div>
                     <strong>${esc(event.title)}</strong>
                     <p>Categoria: ${esc(event.category)}</p>
                     <p>Data do evento: ${esc(event.dateLabel ?? event.date ?? 'A definir')}${event.endDateLabel ? ' — ' + esc(event.endDateLabel) : ''}</p>
                     <p>Organizador: ${esc(event.organizerName ?? event.organizerEmail ?? 'Organizador')}</p>
-                    <p>Submetido em: ${esc(event.submittedAt || 'Pendente')}</p>
+                    <p>Submetido em: ${esc(event.submittedAt && !Number.isNaN(new Date(event.submittedAt).getTime()) ? new Date(event.submittedAt).toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' }) : 'Pendente')}</p>
                   </div>
                   <div class="admin-review-actions">
                     <a class="admin-view-btn" href="event.html?id=${encodeURIComponent(event.id)}&src=admin">Ver página</a>
@@ -3307,28 +3496,30 @@ document.addEventListener('DOMContentLoaded', () => {
                 </article>
               `).join('')
             : '<div class="admin-empty-state">Não existem eventos pendentes de aprovação.</div>';
-
-          const changeRequests = adminEventsState.items.filter((event) => event.hasPendingChange);
-          if (changeRequests.length > 0) {
-            adminPendingEventsContainer.insertAdjacentHTML('beforeend', `
-              <h3 class="admin-review-subtitle">Pedidos de alteração (${changeRequests.length})</h3>
-              ${changeRequests.map((event) => `
-                <article class="admin-review-item">
-                  <div>
-                    <strong>${esc(event.title)}</strong>
-                    <p>Evento já publicado: o organizador pediu alterações. A versão atual mantém-se até decidires.</p>
-                    <p>Organizador: ${esc(event.organizerName ?? event.organizerEmail ?? 'Organizador')}</p>
-                  </div>
-                  <div class="admin-review-actions">
-                    <a class="admin-view-btn" href="event.html?id=${encodeURIComponent(event.id)}&src=admin">Ver alterações</a>
-                    <button type="button" class="admin-approve-btn" data-admin-event-action="approve_change" data-admin-event-id="${event.id}">✓ Aprovar</button>
-                    <button type="button" class="admin-reject-btn" data-admin-event-action="reject_change" data-admin-event-id="${event.id}">✕ Recusar</button>
-                  </div>
-                </article>
-              `).join('')}
-            `);
-          }
         }
+
+        const changeRequests = adminEventsState.items.filter((event) => event.hasPendingChange);
+        const changesCard = profileRoot.querySelector('[data-admin-changes-card]');
+        const changesContainer = profileRoot.querySelector('[data-admin-change-requests]');
+        if (changesCard && changesContainer) {
+          changesCard.hidden = changeRequests.length === 0;
+          changesContainer.innerHTML = changeRequests.map((event) => `
+            <article class="admin-review-item" ${eventDataAttrs(event)}>
+              <div>
+                <strong>${esc(event.title)}</strong>
+                <p>Evento já publicado: o organizador pediu alterações. A versão atual mantém-se até decidires.</p>
+                <p>Categoria: ${esc(event.category)}</p>
+                <p>Organizador: ${esc(event.organizerName ?? event.organizerEmail ?? 'Organizador')}</p>
+              </div>
+              <div class="admin-review-actions">
+                <a class="admin-view-btn" href="event.html?id=${encodeURIComponent(event.id)}&src=admin">Ver alterações</a>
+                <button type="button" class="admin-approve-btn" data-admin-event-action="approve_change" data-admin-event-id="${event.id}">✓ Aprovar</button>
+                <button type="button" class="admin-reject-btn" data-admin-event-action="reject_change" data-admin-event-id="${event.id}">✕ Recusar</button>
+              </div>
+            </article>
+          `).join('');
+        }
+
 
         if (adminPublishedEventsTableBody) {
           const publishedEvents = getAdminPublishedEvents();
@@ -3783,6 +3974,47 @@ document.addEventListener('DOMContentLoaded', () => {
       tabButtons.forEach((button) => {
         button.addEventListener('click', () => {
           setAdminTab(button.dataset.adminTab ?? 'dashboard');
+        });
+      });
+
+      // Ordenar e filtrar as listas da administração.
+      const dateSorts = (key, label) => [
+        { value: `${key}-desc`, label: `${label} (mais recente)`, key, type: 'date', dir: -1 },
+        { value: `${key}-asc`, label: `${label} (mais antigo)`, key, type: 'date', dir: 1 }
+      ];
+      const textSorts = (key, label) => [
+        { value: `${key}-asc`, label: `${label} (A–Z)`, key, type: 'text', dir: 1 },
+        { value: `${key}-desc`, label: `${label} (Z–A)`, key, type: 'text', dir: -1 }
+      ];
+      tableListControls(profileRoot.querySelector('[data-admin-pane="users"] table'),
+        { name: 0, email: 1, registered: 2, events: 3, status: 4 },
+        [...textSorts('name', 'Nome'), ...textSorts('email', 'Email'), ...dateSorts('registered', 'Registo'),
+          { value: 'events-desc', label: 'Eventos (mais)', key: 'events', type: 'number', dir: -1 },
+          { value: 'events-asc', label: 'Eventos (menos)', key: 'events', type: 'number', dir: 1 }],
+        [{ id: 'status', label: 'Estado', key: 'status' }], 'utilizadores');
+      tableListControls(profileRoot.querySelector('[data-admin-pane="organizers"] table'),
+        { name: 0, email: 1, registered: 2, events: 3, status: 4 },
+        [...textSorts('name', 'Nome'), ...textSorts('email', 'Email'), ...dateSorts('registered', 'Registo'),
+          { value: 'events-desc', label: 'Eventos (mais)', key: 'events', type: 'number', dir: -1 },
+          { value: 'events-asc', label: 'Eventos (menos)', key: 'events', type: 'number', dir: 1 }],
+        [{ id: 'status', label: 'Estado', key: 'status' }], 'organizadores');
+      tableListControls(profileRoot.querySelector('[data-admin-published-events]')?.closest('table'),
+        { title: 0, category: 1, date: 2, organizer: 3, status: 4 },
+        [...textSorts('title', 'Título'), ...dateSorts('date', 'Data do evento'), ...textSorts('organizer', 'Organizador')],
+        [{ id: 'category', label: 'Categoria', key: 'category' }, { id: 'organizer', label: 'Organizador', key: 'organizer' }, { id: 'status', label: 'Estado', key: 'status' }], 'eventos');
+      const reviewFields = {
+        title: (item) => item.dataset.title ?? '', category: (item) => item.dataset.category ?? '', organizer: (item) => item.dataset.organizer ?? '',
+        date: (item) => item.dataset.date ?? '', submitted: (item) => item.dataset.submitted ?? ''
+      };
+      [adminPendingEventsContainer, profileRoot.querySelector('[data-admin-change-requests]')].forEach((container) => {
+        attachListControls({
+          container,
+          anchor: container,
+          getItems: () => Array.from(container.querySelectorAll(':scope > .admin-review-item')),
+          fields: reviewFields,
+          sorts: [...textSorts('title', 'Título'), ...dateSorts('date', 'Data do evento'), ...dateSorts('submitted', 'Submetido'), ...textSorts('organizer', 'Organizador')],
+          filters: [{ id: 'category', label: 'Categoria', key: 'category' }, { id: 'organizer', label: 'Organizador', key: 'organizer' }],
+          noun: 'eventos'
         });
       });
 
@@ -4278,6 +4510,7 @@ document.addEventListener('DOMContentLoaded', () => {
       let organizerImages = [];
       let organizerMainImageId = '';
       let organizerImagesBusy = false;
+      let organizerExistingImagesLoaded = false;
       const organizerImageGrid = document.getElementById('organizerImageGrid');
       const organizerImageHint = document.getElementById('organizerImageHint');
 
@@ -4348,6 +4581,7 @@ document.addEventListener('DOMContentLoaded', () => {
       };
 
       const resetOrganizerImages = () => {
+        organizerExistingImagesLoaded = false;
         organizerImages = [];
         organizerMainImageId = '';
         renderOrganizerImages();
@@ -4673,9 +4907,33 @@ document.addEventListener('DOMContentLoaded', () => {
           }
           toggleOrganizerCreatePanel(true);
           updateOrganizerCreateVisibility();
+          // As imagens já enviadas aparecem na edição: podem ser mantidas, removidas, reordenadas ou complementadas.
+          resetOrganizerImages();
+          organizerExistingImagesLoaded = false;
           if (organizerImageHint) {
-            organizerImageHint.textContent = 'Ao adicionar imagens novas, estas substituem as imagens atuais do evento. Sem novas imagens, as atuais mantêm-se.';
+            organizerImageHint.textContent = 'A carregar as imagens atuais…';
           }
+          const loadingForId = editingOrganizerEventId;
+          void requestJson(`/api/event-images?eventId=${encodeURIComponent(loadingForId)}&ids=1`)
+            .then((response) => {
+              if (editingOrganizerEventId !== loadingForId || !Array.isArray(response.ids)) {
+                return;
+              }
+
+              organizerImages = response.ids.map((imageId, index) => ({
+                id: `existing:${imageId}`,
+                name: `Imagem ${index + 1}`,
+                dataUrl: `/api/event-cover?img=${encodeURIComponent(imageId)}`
+              }));
+              organizerMainImageId = organizerImages[0]?.id ?? '';
+              organizerExistingImagesLoaded = true;
+              renderOrganizerImages();
+            })
+            .catch(() => {
+              if (organizerImageHint) {
+                organizerImageHint.textContent = 'Não foi possível carregar as imagens atuais. Se não mexeres nas imagens, mantêm-se como estão.';
+              }
+            });
         };
 
         organizerCreateForm.addEventListener('submit', async (event) => {
@@ -4820,6 +5078,12 @@ document.addEventListener('DOMContentLoaded', () => {
             ...organizerImages.filter((image) => image.id === organizerMainImageId),
             ...organizerImages.filter((image) => image.id !== organizerMainImageId)
           ].map((image) => image.dataUrl);
+          // Na edição envia-se a ordem completa ("existing:<id>" para as já guardadas); só se as atuais foram carregadas,
+          // para nunca apagar imagens por engano.
+          const imageOrderPayload = organizerImages
+            .slice()
+            .sort((a, b) => Number(b.id === organizerMainImageId) - Number(a.id === organizerMainImageId))
+            .map((image) => (String(image.id).startsWith('existing:') ? image.id : image.dataUrl));
 
           try {
             if (editingOrganizerEventId) {
@@ -4841,7 +5105,7 @@ document.addEventListener('DOMContentLoaded', () => {
                   isRecurring,
                   recurringPattern: isRecurring ? 'semanal' : '',
                   recurringDays: isRecurring ? recurringDays.join(',') : '',
-                  images: imagePayload,
+                  ...(organizerExistingImagesLoaded ? { imageOrder: imageOrderPayload } : { images: imagePayload }),
                   visibility,
                   publishAt: visibility === 'schedule' ? new Date(organizerPublishAt.value).toISOString() : ''
                 })
@@ -4967,6 +5231,19 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       updateOrganizerCreateVisibility();
+
+      // Ordenar e filtrar a lista de eventos do organizador.
+      tableListControls(document.getElementById('organizerTableBody')?.closest('table'),
+        { title: 0, category: 1, date: 2, location: 3, status: 4, views: 5 },
+        [
+          { value: 'title-asc', label: 'Título (A–Z)', key: 'title', type: 'text', dir: 1 },
+          { value: 'title-desc', label: 'Título (Z–A)', key: 'title', type: 'text', dir: -1 },
+          { value: 'date-desc', label: 'Data (mais recente)', key: 'date', type: 'date', dir: -1 },
+          { value: 'date-asc', label: 'Data (mais antiga)', key: 'date', type: 'date', dir: 1 },
+          { value: 'views-desc', label: 'Visualizações (mais)', key: 'views', type: 'number', dir: -1 },
+          { value: 'views-asc', label: 'Visualizações (menos)', key: 'views', type: 'number', dir: 1 }
+        ],
+        [{ id: 'category', label: 'Categoria', key: 'category' }, { id: 'status', label: 'Estado', key: 'status' }], 'eventos');
 
       // Vindo da página do evento ("Editar evento"): abre logo o formulário de edição desse evento.
       const editRequestId = new URL(window.location.href).searchParams.get('edit');

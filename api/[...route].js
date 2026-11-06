@@ -500,7 +500,7 @@ async function saveEventImages(connection, eventId, images) {
 }
 
 // Aplica o conteúdo (campos + imagens) de um evento. Usado nas edições diretas e na aprovação de pedidos de alteração.
-async function applyEventContent(db, eventId, input, images) {
+async function applyEventContent(db, eventId, input, images) { // images: resultado de normalizeImagePlan (ou null)
   const categoryId = await resolveCategoryId(db, input.category);
   const locationId = await resolveLocationId(db, input);
   const fields = ['evtitulo=?', 'evdatainicio=?', 'evdatafim=?', 'evvalor=?', 'evlinkbilhete=?', 'evrecorrente=?', 'evperiodicidade=?', 'evdiasrecorrencia=?', 'evidcategoria=?', 'evidlocalizacao=?'];
@@ -508,11 +508,44 @@ async function applyEventContent(db, eventId, input, images) {
   // A descrição só muda se for enviada (antes, editar um evento apagava-a).
   if (input.description !== undefined) { fields.push('evdescricao=?'); values.push(input.description); }
   await db.query(`UPDATE evento SET ${fields.join(',')} WHERE idevento=?`, [...values, eventId]);
-  // Só substitui as imagens se foram enviadas novas; caso contrário mantêm-se as atuais.
-  if (Array.isArray(images) && images.some((image) => /^(data:image\/|https?:\/\/|\/)/i.test(String(image)))) {
-    await db.query('DELETE FROM imagem WHERE imgidevento=?', [eventId]);
-    await saveEventImages(db, eventId, images);
+  await applyEventImages(db, eventId, images);
+}
+
+const IMAGE_SOURCE = /^(data:image\/|https?:\/\/|\/)/i;
+
+// Normaliza o pedido de imagens. Formato novo: imageOrder = ["existing:<id>" | "<data url>", ...] (a primeira é a capa;
+// o que não estiver na lista é apagado). Formato antigo: images = [urls novos] substitui todas (se houver alguma válida).
+function normalizeImagePlan(body) {
+  if (Array.isArray(body?.imageOrder)) {
+    return { order: body.imageOrder.map(String).filter((item) => /^existing:\d+$/.test(item) || IMAGE_SOURCE.test(item)).slice(0, 10) };
   }
+  if (Array.isArray(body?.images)) {
+    const fresh = body.images.map(String).filter((item) => IMAGE_SOURCE.test(item));
+    if (fresh.length) return { order: fresh };
+  }
+  return null;
+}
+
+async function applyEventImages(db, eventId, plan) {
+  if (!plan?.order) return;
+  const [current] = await db.query('SELECT idimagem FROM imagem WHERE imgidevento=?', [eventId]);
+  const owned = new Set(current.map((row) => Number(row.idimagem)));
+  const order = plan.order.filter((item) => !item.startsWith('existing:') || owned.has(Number(item.slice(9))));
+  const keep = order.filter((item) => item.startsWith('existing:')).map((item) => Number(item.slice(9)));
+  const drop = [...owned].filter((id) => !keep.includes(id));
+  if (drop.length) await db.query(`DELETE FROM imagem WHERE imgidevento=? AND idimagem IN (${drop.map(() => '?').join(',')})`, [eventId, ...drop]);
+  let coverId = null;
+  for (const item of order) {
+    let id;
+    if (item.startsWith('existing:')) id = Number(item.slice(9));
+    else {
+      const [inserted] = await db.query('INSERT INTO imagem (imgurl,imgtipo,imgidevento) VALUES (?,?,?)', [item, 'galeria', eventId]);
+      id = inserted.insertId;
+    }
+    if (coverId === null) coverId = id;
+  }
+  await db.query("UPDATE imagem SET imgtipo='galeria' WHERE imgidevento=?", [eventId]);
+  if (coverId !== null) await db.query("UPDATE imagem SET imgtipo='capa' WHERE idimagem=?", [coverId]);
 }
 
 async function getChangeRequest(db, eventId) {
@@ -520,7 +553,9 @@ async function getChangeRequest(db, eventId) {
   if (!rows[0]) return null;
   let data = null;
   try { data = JSON.parse(rows[0].aldados); } catch { data = null; }
-  return data ? { input: data.input, images: Array.isArray(data.images) ? data.images : [], requestedAt: rows[0].aldata, rejectReason: rows[0].almotivo || '' } : null;
+  // Pedidos antigos guardavam "images" (todas novas); os atuais guardam "imageOrder" (ou null = não mexer nas imagens).
+  const imageOrder = Array.isArray(data?.imageOrder) ? data.imageOrder : (Array.isArray(data?.images) && data.images.length ? data.images : null);
+  return data ? { input: data.input, imageOrder, requestedAt: rows[0].aldata, rejectReason: rows[0].almotivo || '' } : null;
 }
 
 // Elimina uma conta de utilizador da base de dados. Se for organizador, apaga primeiro os seus eventos
@@ -1021,11 +1056,10 @@ async function handler(req, res) {
           // Evento já aprovado: o estado (publicar/agendar/ocultar) aplica-se já, mas as alterações ao conteúdo
           // só entram em vigor depois de um administrador as aprovar. Até lá, a versão atual mantém-se.
           await db.query(`UPDATE evento SET ${stateFields.join(',')} WHERE idevento=?`, [...stateValues, eventId]);
-          const images = Array.isArray(body.images) ? body.images.filter((image) => /^(data:image\/|https?:\/\/|\/)/i.test(String(image))) : [];
-          await db.query('REPLACE INTO eventoalteracao (alidevento, aldados, aldata, almotivo) VALUES (?,?,?,NULL)', [eventId, JSON.stringify({ input, images }), utcTimestamp()]);
+          await db.query('REPLACE INTO eventoalteracao (alidevento, aldados, aldata, almotivo) VALUES (?,?,?,NULL)', [eventId, JSON.stringify({ input, imageOrder: normalizeImagePlan(body)?.order ?? null }), utcTimestamp()]);
         } else {
           await db.query(`UPDATE evento SET ${stateFields.join(',')} WHERE idevento=?`, [...stateValues, eventId]);
-          await applyEventContent(db, eventId, input, body.images);
+          await applyEventContent(db, eventId, input, normalizeImagePlan(body));
           if (isAdminActor) await db.query('DELETE FROM eventoalteracao WHERE alidevento=?', [eventId]);
         }
         if (visibility.estado === 'publicado') await db.query('UPDATE evento SET evdatapublicacao=COALESCE(evdatapublicacao, ?) WHERE idevento=?', [utcTimestamp(), eventId]);
@@ -1060,6 +1094,11 @@ async function handler(req, res) {
     const isPublic = ['publicado', 'ativo'].includes(events[0].evestado);
     const isOwner = user && (user.accountType === 'admin' || String(user.email || '').toLowerCase() === String(events[0].orgemail || '').toLowerCase());
     if (!isPublic && !isOwner) return json(res, 403, { ok: false, message: 'Sem permissão.' });
+    if (String(queryParam(req, 'ids') || '') === '1') {
+      // Só os ids (leve): a edição usa-os para mostrar as imagens atuais sem as descarregar em base64.
+      const [idRows] = await db.query("SELECT idimagem FROM imagem WHERE imgidevento=? ORDER BY (imgtipo='capa') DESC, idimagem ASC", [eventId]);
+      return json(res, 200, { ok: true, ids: idRows.map((row) => Number(row.idimagem)) });
+    }
     const [rows] = await db.query("SELECT imgurl FROM imagem WHERE imgidevento=? ORDER BY (imgtipo='capa') DESC, idimagem ASC", [eventId]);
     return json(res, 200, { ok: true, images: rows.map((row) => row.imgurl) });
   }
@@ -1067,9 +1106,13 @@ async function handler(req, res) {
   // da imagem: muda quando a capa muda, por isso a resposta pode ficar em cache "para sempre".
   if (route === 'event-cover' && req.method === 'GET') {
     const eventId = Number(queryParam(req, 'id'));
-    if (!eventId) return json(res, 422, { ok: false, message: 'Evento inválido.' });
+    const imageId = Number(queryParam(req, 'img'));
+    if (!eventId && !imageId) return json(res, 422, { ok: false, message: 'Evento inválido.' });
     const user = currentUser(req);
-    const [covers] = await db.query("SELECT img.imgurl, e.evestado, o.orgemail FROM imagem img JOIN evento e ON e.idevento=img.imgidevento JOIN organizador o ON o.idorganizador=e.evidorganizador WHERE img.imgidevento=? AND img.imgtipo='capa' ORDER BY img.idimagem LIMIT 1", [eventId]);
+    // ?img=<id da imagem> serve uma imagem concreta (usado na edição); ?id=<evento> serve a capa.
+    const [covers] = imageId
+      ? await db.query("SELECT img.imgurl, e.evestado, o.orgemail FROM imagem img JOIN evento e ON e.idevento=img.imgidevento JOIN organizador o ON o.idorganizador=e.evidorganizador WHERE img.idimagem=? LIMIT 1", [imageId])
+      : await db.query("SELECT img.imgurl, e.evestado, o.orgemail FROM imagem img JOIN evento e ON e.idevento=img.imgidevento JOIN organizador o ON o.idorganizador=e.evidorganizador WHERE img.imgidevento=? AND img.imgtipo='capa' ORDER BY img.idimagem LIMIT 1", [eventId]);
     const cover = covers[0];
     if (!cover) return json(res, 404, { ok: false, message: 'Sem imagem.' });
     const isPublic = ['publicado', 'ativo'].includes(cover.evestado);
@@ -1270,7 +1313,7 @@ async function handler(req, res) {
       const change = await getChangeRequest(db, eventId);
       if (!change || !change.input) return json(res, 404, { ok: false, message: 'Não há nenhum pedido de alteração para este evento.' });
       if (action === 'approve_change') {
-        await applyEventContent(db, eventId, change.input, change.images);
+        await applyEventContent(db, eventId, change.input, change.imageOrder ? { order: change.imageOrder } : null);
         await db.query('DELETE FROM eventoalteracao WHERE alidevento=?', [eventId]);
       } else {
         const reason = String(body.reason || '').trim().slice(0, 300) || 'Sem motivo indicado.';
@@ -1315,7 +1358,20 @@ async function handler(req, res) {
       for (const key of Object.keys(current)) {
         if (String(current[key] ?? '').trim() !== String(next[key] ?? '').trim()) diff.push({ field: key, label: label(key), from: String(current[key] ?? '') || '—', to: String(next[key] ?? '') || '—' });
       }
-      if (change.images.length) diff.push({ field: 'images', label: 'Imagens', from: 'Atuais', to: `${change.images.length} nova(s) imagem(ns)` });
+      const [currentImages] = await db.query("SELECT idimagem FROM imagem WHERE imgidevento=? ORDER BY (imgtipo='capa') DESC, idimagem ASC", [eventId]);
+      const currentTokens = currentImages.map((row) => `existing:${row.idimagem}`);
+      // Imagens da versão proposta: as já existentes servem-se por id; as novas vêm no próprio pedido.
+      const proposedImages = change.imageOrder ? change.imageOrder.map((item) => (item.startsWith('existing:') ? `/api/event-cover?img=${item.slice(9)}` : item)) : null;
+      if (change.imageOrder && JSON.stringify(change.imageOrder) !== JSON.stringify(currentTokens)) {
+        const kept = change.imageOrder.filter((item) => currentTokens.includes(item));
+        const added = change.imageOrder.length - kept.length;
+        const removed = currentTokens.length - kept.length;
+        const parts = [];
+        if (added) parts.push(`${added} nova(s)`);
+        if (removed) parts.push(`${removed} removida(s)`);
+        if (!added && !removed) parts.push('ordem / imagem principal alterada');
+        diff.push({ field: 'images', label: 'Imagens', from: `${currentTokens.length} atual(is)`, to: parts.join(', ') });
+      }
       proposed = {
         ...event, title: input.title, description: input.description === undefined ? event.description : (input.description || ''),
         startDate: input.startDate, eventDate: input.startDate, endDate: input.endDate || '', ...formatPrice(input.price),
@@ -1323,7 +1379,7 @@ async function handler(req, res) {
         street: input.street || '', location: [input.street, input.city].filter(Boolean).join(', '), isRecurring: Boolean(input.isRecurring),
         recurringPattern: input.recurringPattern || '', recurringDays: input.recurringDays || '',
         dateLabel: new Date(input.startDate).toLocaleString('pt-PT', { dateStyle: 'short', timeStyle: 'short' }),
-        image: change.images[0] || event.image, images: change.images
+        image: proposedImages?.[0] || event.image, images: proposedImages || []
       };
     }
     return json(res, 200, { ok: true, event, change: change ? { requestedAt: change.requestedAt, rejectReason: change.rejectReason, diff, proposed } : null });
