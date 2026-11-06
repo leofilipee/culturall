@@ -5816,6 +5816,15 @@ body.auth-mode .content {
   outline-offset: 1px;
 }
 
+/* Olho barrado = palavra-passe escondida; olho aberto = palavra-passe visível. */
+.password-toggle .eye-slash {
+  display: block;
+}
+
+.password-toggle.is-visible .eye-slash {
+  display: none;
+}
+
 .password-toggle svg {
   width: 20px;
   height: 20px;
