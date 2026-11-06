@@ -2078,7 +2078,7 @@ select {
 
 .admin-user-profile-info {
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 
 .admin-user-profile-info div {
@@ -6009,5 +6009,428 @@ body.auth-mode .content {
   .auth-stage[data-mode="login"] .auth-half-register,
   .auth-stage[data-mode="register"] .auth-half-login {
     display: none;
+  }
+}
+
+/* =========================================================
+ * Painel de Administração: cabeçalho, separadores, cartões,
+ * tabelas, estados, ações e janelas
+ * ========================================================= */
+.admin-page {
+  padding-bottom: 56px;
+}
+
+.admin-hero {
+  position: relative;
+  margin: 28px 0 22px;
+  padding: 28px 30px;
+  border-radius: 26px;
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(221, 90, 45, 0.16), transparent 46%),
+    radial-gradient(circle at 0% 100%, rgba(127, 92, 255, 0.08), transparent 42%),
+    rgba(255, 252, 246, 0.86);
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+}
+
+.admin-hero::before {
+  content: "Administração";
+  display: inline-block;
+  margin-bottom: 10px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.admin-hero h1 {
+  font-size: clamp(1.9rem, 2.6vw, 2.5rem);
+}
+
+/* Separadores em forma de pílula */
+.admin-tabs-shell {
+  position: sticky;
+  top: calc(var(--topbar-height) + 6px);
+  z-index: 20;
+  margin-bottom: 22px;
+}
+
+.admin-tabs {
+  display: inline-flex;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 252, 246, 0.92);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-soft);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.admin-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.admin-tab-btn {
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-size: 0.92rem;
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.admin-tab-btn:hover:not(.active) {
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+}
+
+.admin-tab-btn.active {
+  background: linear-gradient(180deg, #e2652f, #c9441f);
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(201, 68, 31, 0.28);
+}
+
+.admin-tab-btn.active::after {
+  display: none;
+}
+
+.admin-panel.active {
+  animation: admin-panel-in 0.28s ease both;
+}
+
+@keyframes admin-panel-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Cartões de secção */
+.admin-section-card {
+  padding: 0;
+  border-radius: 22px;
+  background: rgba(255, 252, 246, 0.9);
+}
+
+.admin-section-card > h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 22px 6px;
+  font-size: 1.12rem;
+  letter-spacing: -0.02em;
+}
+
+.admin-section-card > h2::before {
+  content: "";
+  width: 6px;
+  height: 20px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #e2652f, #c9441f);
+}
+
+/* Barra de ordenar / filtrar dentro dos cartões */
+.admin-section-card .list-controls {
+  margin: 12px 22px 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.admin-section-card .list-control {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.admin-section-card .list-control select {
+  height: 38px;
+  border-radius: 12px;
+  background-color: var(--panel-strong);
+  text-transform: none;
+  letter-spacing: 0;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.admin-section-card .list-control select:hover {
+  border-color: rgba(221, 90, 45, 0.45);
+}
+
+.admin-section-card .list-control select:focus-visible {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+}
+
+.admin-section-card .list-count {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.admin-section-card .load-more-wrap {
+  padding: 4px 22px 22px;
+}
+
+/* Tabelas */
+.admin-table thead th {
+  padding: 13px 18px;
+  background: rgba(240, 227, 209, 0.55);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.admin-table tbody td {
+  padding: 14px 18px;
+  font-size: 0.93rem;
+}
+
+.admin-table tbody tr:nth-child(even) {
+  background: transparent;
+}
+
+.admin-table tbody tr {
+  transition: background 0.15s ease;
+}
+
+.admin-table tbody tr:hover {
+  background: rgba(221, 90, 45, 0.05);
+}
+
+.admin-table tbody td:first-child {
+  font-weight: 700;
+}
+
+.admin-table th:last-child,
+.admin-table td:last-child {
+  text-align: right;
+}
+
+.admin-table td:last-child .admin-actions-group {
+  justify-content: flex-end;
+}
+
+/* Estados */
+.admin-pill {
+  gap: 6px;
+  padding: 5px 12px 5px 10px;
+  font-size: 0.76rem;
+  letter-spacing: 0.02em;
+}
+
+.admin-pill::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.admin-pill.muted,
+.admin-pill.inactive {
+  background: rgba(127, 112, 99, 0.16);
+  color: #6b5a4d;
+}
+
+/* Botões de ação */
+.admin-icon-btn {
+  width: 36px;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  background: #fff;
+  transition: transform 0.15s ease, background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.admin-icon-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(221, 90, 45, 0.4);
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+  box-shadow: 0 6px 14px rgba(84, 57, 38, 0.1);
+}
+
+.admin-icon-btn.danger:hover {
+  border-color: rgba(195, 33, 33, 0.4);
+  background: rgba(255, 115, 115, 0.16);
+  color: #c32121;
+}
+
+.admin-icon-btn:focus-visible,
+.admin-approve-btn:focus-visible,
+.admin-reject-btn:focus-visible,
+.admin-pill-button:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.admin-approve-btn,
+.admin-reject-btn,
+.admin-pill-button {
+  min-height: 38px;
+  padding: 0 16px;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+.admin-approve-btn:hover,
+.admin-reject-btn:hover,
+.admin-pill-button:hover {
+  transform: translateY(-1px);
+  filter: brightness(0.96);
+}
+
+.admin-approve-btn {
+  background: linear-gradient(180deg, #1fa866, #158a52);
+  color: #fff;
+}
+
+.admin-reject-btn {
+  background: rgba(195, 33, 33, 0.1);
+  color: #c32121;
+}
+
+/* Pedidos pendentes / alterações */
+.admin-review-item {
+  align-items: center;
+  margin: 0 22px 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.78);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.admin-review-item:hover {
+  border-color: rgba(221, 90, 45, 0.3);
+  box-shadow: var(--shadow-soft);
+}
+
+.admin-review-list {
+  padding-top: 8px;
+}
+
+.admin-empty-state {
+  margin: 8px 22px 22px;
+  padding: 22px;
+  border: 1px dashed rgba(114, 90, 67, 0.25);
+  border-radius: 16px;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+/* Cartões de indicadores */
+.admin-kpi-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.admin-kpi-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+}
+
+/* Janelas (perfil, confirmações) */
+.admin-modal-backdrop {
+  animation: admin-fade 0.2s ease both;
+}
+
+.admin-modal-card {
+  width: min(100%, 420px);
+  padding: 28px 26px 24px;
+  border-radius: 24px;
+  background: var(--panel-strong);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  animation: admin-pop 0.24s cubic-bezier(.2, .9, .3, 1.1) both;
+}
+
+.admin-modal-card.confirm {
+  width: min(100%, 440px);
+}
+
+.admin-modal-card h2 {
+  font-size: 1.3rem;
+}
+
+.admin-modal-x {
+  top: 16px;
+  right: 16px;
+  width: 34px;
+  height: 34px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.admin-modal-x:hover {
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+}
+
+.admin-user-profile-info div {
+  padding: 8px 14px;
+  border-radius: 14px;
+  background: rgba(240, 227, 209, 0.45);
+}
+
+.admin-user-profile-info span {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+@keyframes admin-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes admin-pop {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (max-width: 900px) {
+  .admin-hero {
+    margin-top: 18px;
+    padding: 22px 20px;
+    border-radius: 22px;
+  }
+
+  .admin-tabs-shell {
+    position: static;
+  }
+
+  .admin-tabs {
+    display: none;
+  }
+
+  .admin-section-card .list-controls,
+  .admin-review-item,
+  .admin-empty-state {
+    margin-left: 14px;
+    margin-right: 14px;
+  }
+
+  .admin-section-card > h2 {
+    padding: 18px 16px 4px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-panel.active,
+  .admin-modal-backdrop,
+  .admin-modal-card {
+    animation: none;
   }
 }
