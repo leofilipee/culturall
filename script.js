@@ -2530,9 +2530,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const renderLoginPage = () => {
     const loginForm = document.getElementById('loginForm');
-    if (!loginForm) {
+    if (!loginForm || loginForm.dataset.ready === '1') {
       return;
     }
+
+    // Só liga os eventos uma vez (a página de entrada liga-os logo ao abrir).
+    loginForm.dataset.ready = '1';
 
     const loginPanel = document.getElementById('loginPanel');
     const authMessage = document.getElementById('authMessage');
@@ -5374,6 +5377,11 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   void (async () => {
+    // A página de entrada não precisa de esperar pela rede: liga os botões logo ao abrir.
+    if (pageType === 'login') {
+      renderLoginPage();
+    }
+
     // Mostra já o utilizador (a partir da sessão em cache) para o cabeçalho não aparecer vazio entre páginas.
     if (getSession()) {
       syncLoginHeaderState();
