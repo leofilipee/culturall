@@ -462,18 +462,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Barra de ordenação + filtros para uma lista que se volta a desenhar (tabela ou cartões). Funciona sobre o DOM:
   // volta a aplicar-se sozinha sempre que a lista muda. `fields[chave](elemento)` devolve o texto de cada coluna.
-  const attachListControls = ({ container, anchor, getItems, fields, sorts = [], filters = [], noun = 'resultados' }) => {
+  const attachListControls = ({ container, anchor, getItems, fields, sorts = [], filters = [], noun = 'resultados', pagination = 'more' }) => {
     if (!container || !anchor || anchor.previousElementSibling?.classList.contains('list-controls')) {
       return;
     }
 
     const pageSize = 12;
-    const state = { sort: '', filters: {}, limit: pageSize };
+    const state = { sort: '', filters: {}, limit: pageSize, page: 1 };
+    const numbered = pagination === 'pages';
     const moreWrap = document.createElement('div');
     moreWrap.className = 'load-more-wrap';
     moreWrap.hidden = true;
-    moreWrap.innerHTML = '<button type="button" class="load-more-btn"></button>';
-    const moreButton = moreWrap.firstElementChild;
+    moreWrap.innerHTML = numbered ? '<nav class="pager" aria-label="Páginas"></nav>' : '<button type="button" class="load-more-btn"></button>';
+    const moreButton = numbered ? null : moreWrap.firstElementChild;
+    const pager = numbered ? moreWrap.firstElementChild : null;
     let originalCounter = 0;
     let applying = false;
     const bar = document.createElement('div');
@@ -558,21 +560,34 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         ordered.forEach((item) => container.appendChild(item));
 
-        // Paginação: só os primeiros `state.limit` resultados ficam visíveis; "Ver mais" mostra os seguintes.
-        let shown = 0;
-        ordered.forEach((item) => {
-          if (item.classList.contains('list-hidden')) {
-            return;
-          }
-
-          shown += 1;
-          if (shown > state.limit) {
-            item.classList.add('list-hidden');
-          }
-        });
-        const remaining = Math.max(0, visible - state.limit);
-        moreWrap.hidden = remaining === 0;
-        moreButton.textContent = `Ver mais (${remaining} ${remaining === 1 ? 'restante' : 'restantes'})`;
+        // Paginação: "Ver mais" (mostra mais 12 de cada vez) ou páginas numeradas (1, 2, 3…).
+        const visibleItems = ordered.filter((item) => !item.classList.contains('list-hidden'));
+        if (numbered) {
+          const pages = Math.max(1, Math.ceil(visibleItems.length / pageSize));
+          state.page = Math.min(Math.max(1, state.page), pages);
+          visibleItems.forEach((item, index) => {
+            item.classList.toggle('list-hidden', Math.floor(index / pageSize) + 1 !== state.page);
+          });
+          moreWrap.hidden = pages <= 1;
+          const around = [1, pages, state.page - 1, state.page, state.page + 1].filter((n) => n >= 1 && n <= pages);
+          const numbersToShow = [...new Set(around)].sort((a, b) => a - b);
+          let previous = 0;
+          const buttons = numbersToShow.map((n) => {
+            const gap = n - previous > 1 ? '<span class="pager-gap" aria-hidden="true">…</span>' : '';
+            previous = n;
+            return `${gap}<button type="button" class="pager-btn${n === state.page ? ' active' : ''}" data-page="${n}" aria-label="Página ${n}"${n === state.page ? ' aria-current="page"' : ''}>${n}</button>`;
+          }).join('');
+          pager.innerHTML = `<button type="button" class="pager-btn" data-page="${state.page - 1}" aria-label="Página anterior"${state.page === 1 ? ' disabled' : ''}>‹</button>${buttons}<button type="button" class="pager-btn" data-page="${state.page + 1}" aria-label="Página seguinte"${state.page === pages ? ' disabled' : ''}>›</button>`;
+        } else {
+          visibleItems.forEach((item, index) => {
+            if (index >= state.limit) {
+              item.classList.add('list-hidden');
+            }
+          });
+          const remaining = Math.max(0, visible - state.limit);
+          moreWrap.hidden = remaining === 0;
+          moreButton.textContent = `Ver mais (${remaining} ${remaining === 1 ? 'restante' : 'restantes'})`;
+        }
 
         const filtered = Boolean(state.sort) || filters.some((filter) => state.filters[filter.id]);
         resetButton.hidden = !filtered;
@@ -595,16 +610,28 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       state.limit = pageSize;
+      state.page = 1;
       apply();
     });
-    moreButton.addEventListener('click', () => {
+    moreButton?.addEventListener('click', () => {
       state.limit += pageSize;
       apply();
+    });
+    pager?.addEventListener('click', (event) => {
+      const button = event.target instanceof Element ? event.target.closest('[data-page]') : null;
+      if (!button || button.disabled) {
+        return;
+      }
+
+      state.page = Number(button.dataset.page);
+      apply();
+      anchor.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
     resetButton.addEventListener('click', () => {
       state.sort = '';
       state.filters = {};
       state.limit = pageSize;
+      state.page = 1;
       if (sortSelect) {
         sortSelect.value = '';
       }
@@ -615,7 +642,7 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   // Atalhos para tabelas (colunas por índice) e para listas de cartões (atributos data-*).
-  const tableListControls = (table, columns, sorts, filters, noun) => {
+  const tableListControls = (table, columns, sorts, filters, noun, pagination = 'more') => {
     if (!table?.tBodies[0]) {
       return;
     }
@@ -630,7 +657,8 @@ document.addEventListener('DOMContentLoaded', () => {
       fields,
       sorts,
       filters,
-      noun
+      noun,
+      pagination
     });
   };
 
@@ -3368,19 +3396,6 @@ document.addEventListener('DOMContentLoaded', () => {
                   </table>
                 </div>
               </div>
-
-              <div class="admin-section-card">
-                <h2>Arquivados</h2>
-                <p class="admin-section-hint">Eventos que já terminaram. Deixam de aparecer na plataforma e de somar visualizações, mas os dados que já tinham continuam nos gráficos.</p>
-                <div class="admin-table-wrap">
-                  <table class="admin-table">
-                    <thead>
-                      <tr><th>Título</th><th>Categoria</th><th>Data</th><th>Organizador</th><th>Estado</th><th>Ações</th></tr>
-                    </thead>
-                    <tbody data-admin-archived-events></tbody>
-                  </table>
-                </div>
-              </div>
             </section>
 
             <section class="admin-panel" data-admin-pane="organizers">
@@ -3511,7 +3526,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const adminEventActionReason = adminEventActionModal.querySelector('#adminEventActionReason');
       const adminPendingEventsContainer = profileRoot.querySelector('[data-admin-pending-events]');
       const adminPublishedEventsTableBody = profileRoot.querySelector('[data-admin-published-events]');
-      const adminArchivedEventsTableBody = profileRoot.querySelector('[data-admin-archived-events]');
       const adminOrganizerAvatar = adminOrganizerProfileModal.querySelector('#adminOrganizerAvatar');
       const adminOrganizerName = adminOrganizerProfileModal.querySelector('#adminOrganizerName');
       const adminOrganizerEmail = adminOrganizerProfileModal.querySelector('#adminOrganizerEmail');
@@ -3534,12 +3548,13 @@ document.addEventListener('DOMContentLoaded', () => {
       const getAdminEventById = (eventId) => adminEventsState.items.find((event) => String(event.id) === String(eventId)) ?? null;
       const getAdminOrganizerByEmail = (email) => adminOrganizers.find((organizer) => organizer.email === email) ?? null;
 
-      // Eventos terminados saem das listas de gestão e ficam em "Arquivados".
+      // Eventos terminados saem das listas de revisão; na lista de eventos aparecem como "Inativo" (sem reativação).
       const getAdminPendingEvents = () => adminEventsState.items.filter((event) => normalizeAdminEventStatus(event.status) === 'pending' && !isPastEvent(event));
 
-      const getAdminPublishedEvents = () => adminEventsState.items.filter((event) => ['active', 'hidden'].includes(normalizeAdminEventStatus(event.status)) && !isPastEvent(event));
-
-      const getAdminArchivedEvents = () => adminEventsState.items.filter((event) => isPastEvent(event));
+      const getAdminPublishedEvents = () => adminEventsState.items.filter((event) => {
+        const status = normalizeAdminEventStatus(event.status);
+        return isPastEvent(event) ? ['active', 'hidden', 'pending'].includes(status) : ['active', 'hidden'].includes(status);
+      });
 
       const renderAdminModerationLists = () => {
         const eventDataAttrs = (event) => `data-title="${esc(event.title)}" data-category="${esc(event.category)}" data-organizer="${esc(event.organizerName ?? event.organizerEmail ?? '')}" data-date="${esc(String(new Date(event.startDate ?? event.eventDate ?? 0).getTime() || ''))}" data-submitted="${esc(String(new Date(event.submittedAt || 0).getTime() || ''))}"`;
@@ -3593,7 +3608,8 @@ document.addEventListener('DOMContentLoaded', () => {
           const publishedEvents = getAdminPublishedEvents();
           adminPublishedEventsTableBody.innerHTML = publishedEvents.length > 0
             ? publishedEvents.map((event) => {
-                const status = normalizeAdminEventStatus(event.status);
+                const ended = isPastEvent(event);
+                const status = ended ? 'inactive' : normalizeAdminEventStatus(event.status);
                 const toggleAction = status === 'hidden' ? 'show' : 'hide';
                 const toggleLabel = status === 'hidden' ? 'Mostrar evento' : 'Ocultar evento';
                 const toggleIcon = status === 'hidden'
@@ -3606,11 +3622,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     <td>${esc(event.category)}</td>
                     <td>${esc(event.dateLabel ?? event.date ?? 'A definir')}${event.endDateLabel ? ' — ' + esc(event.endDateLabel) : ''}</td>
                     <td>${esc(event.organizerName ?? event.organizerEmail ?? 'Organizador')}</td>
-                    <td><span class="admin-pill ${status === 'hidden' || status === 'pending' ? 'warning' : 'success'}">${normalizeAdminEventStatusLabel(status)}</span></td>
+                    <td><span class="admin-pill ${status === 'active' ? 'success' : status === 'inactive' ? 'danger' : 'warning'}">${normalizeAdminEventStatusLabel(status)}</span></td>
                     <td>
                       <div class="admin-actions-group">
                         <a class="admin-icon-btn" aria-label="Ver página do evento" href="event.html?id=${encodeURIComponent(event.id)}&src=admin"><svg viewBox="0 0 24 24"><path d="M14 4h6v6"></path><path d="M20 4l-9 9"></path><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"></path></svg></a>
-                        <button type="button" class="admin-icon-btn" aria-label="${toggleLabel}" data-admin-event-action="${toggleAction}" data-admin-event-id="${event.id}">${toggleIcon}</button>
+                        ${ended ? '' : `<button type="button" class="admin-icon-btn" aria-label="${toggleLabel}" data-admin-event-action="${toggleAction}" data-admin-event-id="${event.id}">${toggleIcon}</button>`}
                         <button type="button" class="admin-icon-btn danger" aria-label="Eliminar evento" data-admin-event-action="delete" data-admin-event-id="${event.id}"><svg viewBox="0 0 24 24"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M6 7l1 13h10l1-13"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg></button>
                       </div>
                     </td>
@@ -3618,30 +3634,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 `;
               }).join('')
             : '<tr><td colspan="6"><div class="admin-empty-state">Não existem eventos publicados para gerir.</div></td></tr>';
-        }
-
-        if (adminArchivedEventsTableBody) {
-          const archivedEvents = getAdminArchivedEvents();
-          adminArchivedEventsTableBody.innerHTML = archivedEvents.length > 0
-            ? archivedEvents.map((event) => {
-                const status = normalizeAdminEventStatus(event.status);
-                return `
-                  <tr>
-                    <td>${esc(event.title)}</td>
-                    <td>${esc(event.category)}</td>
-                    <td>${esc(event.dateLabel ?? event.date ?? 'A definir')}${event.endDateLabel ? ' — ' + esc(event.endDateLabel) : ''}</td>
-                    <td>${esc(event.organizerName ?? event.organizerEmail ?? 'Organizador')}</td>
-                    <td><span class="admin-pill ${status === 'active' ? 'success' : 'warning'}">${normalizeAdminEventStatusLabel(status)}</span></td>
-                    <td>
-                      <div class="admin-actions-group">
-                        <a class="admin-icon-btn" aria-label="Ver página do evento" href="event.html?id=${encodeURIComponent(event.id)}&src=admin"><svg viewBox="0 0 24 24"><path d="M14 4h6v6"></path><path d="M20 4l-9 9"></path><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"></path></svg></a>
-                        <button type="button" class="admin-icon-btn danger" aria-label="Eliminar evento" data-admin-event-action="delete" data-admin-event-id="${event.id}"><svg viewBox="0 0 24 24"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M6 7l1 13h10l1-13"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg></button>
-                      </div>
-                    </td>
-                  </tr>
-                `;
-              }).join('')
-            : '<tr><td colspan="6"><div class="admin-empty-state">Ainda não há eventos arquivados.</div></td></tr>';
         }
       };
 
@@ -4093,11 +4085,7 @@ document.addEventListener('DOMContentLoaded', () => {
       tableListControls(profileRoot.querySelector('[data-admin-published-events]')?.closest('table'),
         { title: 0, category: 1, date: 2, organizer: 3, status: 4 },
         [...textSorts('title', 'Título'), ...dateSorts('date', 'Data do evento'), ...textSorts('organizer', 'Organizador')],
-        [{ id: 'category', label: 'Categoria', key: 'category' }, { id: 'organizer', label: 'Organizador', key: 'organizer' }, { id: 'status', label: 'Estado', key: 'status' }], 'eventos');
-      tableListControls(profileRoot.querySelector('[data-admin-archived-events]')?.closest('table'),
-        { title: 0, category: 1, date: 2, organizer: 3, status: 4 },
-        [...textSorts('title', 'Título'), ...dateSorts('date', 'Data do evento'), ...textSorts('organizer', 'Organizador')],
-        [{ id: 'category', label: 'Categoria', key: 'category' }, { id: 'organizer', label: 'Organizador', key: 'organizer' }, { id: 'status', label: 'Estado', key: 'status' }], 'eventos');
+        [{ id: 'category', label: 'Categoria', key: 'category' }, { id: 'organizer', label: 'Organizador', key: 'organizer' }, { id: 'status', label: 'Estado', key: 'status' }], 'eventos', 'pages');
       const reviewFields = {
         title: (item) => item.dataset.title ?? '', category: (item) => item.dataset.category ?? '', organizer: (item) => item.dataset.organizer ?? '',
         date: (item) => item.dataset.date ?? '', submitted: (item) => item.dataset.submitted ?? ''

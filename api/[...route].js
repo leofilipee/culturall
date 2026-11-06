@@ -1314,6 +1314,11 @@ async function handler(req, res) {
     const action = String(body.action || '').toLowerCase(), eventId = Number(body.eventId);
     const states = { approve: 'publicado', show: 'publicado', hide: 'oculto', reject: 'recusado', inactivate: 'inativo' };
     if (!eventId) return json(res, 422, { ok: false, message: 'Evento inválido.' });
+    // Um evento que já terminou não pode ser reativado (aprovado, mostrado ou alterado).
+    if (['approve', 'show', 'approve_change'].includes(action)) {
+      const [ended] = await db.query(`SELECT ${ENDED_SQL} AS terminado FROM evento e WHERE e.idevento=?`, [lisbonTimestamp(), eventId]);
+      if (ended[0] && Number(ended[0].terminado)) return json(res, 409, { ok: false, message: 'Este evento já terminou e não pode ser reativado.' });
+    }
     if (action === 'delete') { await db.query('DELETE FROM eventoalteracao WHERE alidevento=?', [eventId]); await db.query('DELETE FROM evento WHERE idevento=?', [eventId]); }
     else if (action === 'approve_change' || action === 'reject_change') {
       const change = await getChangeRequest(db, eventId);

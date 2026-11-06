@@ -161,7 +161,7 @@ Origem: `CulturAll-melhorado.zip` aplicado sobre o projeto online (Vercel + TiDB
 ## Fase 7 — Eventos terminados e "Arquivados"
 - Um evento acabou quando passa a data de fim (ou, sem data de fim, quando o dia do início já passou). Eventos periódicos nunca terminam.
 - Removido o filtro/opção "Passados", o chip "Já aconteceram" e a secção "Já aconteceram" da página inicial. Eventos terminados deixam de aparecer nas listas, nos destaques, na pesquisa, nos favoritos, no mapa e nos relacionados.
-- Novo "Arquivados": no separador de moderação do administrador (todos os eventos terminados) e no painel do organizador (só os seus).
+- Administrador: os eventos terminados aparecem na lista "Eventos Publicados" da moderação com o estado "Inativo" (filtro de estado), sem botão de reativar; o servidor recusa aprovar/mostrar um evento terminado. Essa lista usa páginas numeradas (1, 2, 3…). Organizador: os seus eventos terminados ficam em "Arquivados" no painel.
 - Dados: eventos terminados deixam de somar visualizações e interações (servidor: `/api/track`, `/api/go` e favoritos; página do evento não regista visita). O que já estava registado continua nos gráficos.
 - Página de um evento terminado: nota "Este evento já terminou." e botões Ver Bilhetes, Favoritos, Calendário e Partilhar desativados (cinzento). `/api/go` já não redireciona para a bilheteira.
 - Mapa: sem botão "Ver mais" e com marcadores agrupados (markercluster, carregado só ao abrir o mapa).
